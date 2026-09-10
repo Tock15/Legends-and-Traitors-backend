@@ -6,6 +6,11 @@ Guidance for Claude Code when working in `legends-and-traitors-backend`.
 > without touching the others. Facts marked **(repo-verified)** were read from code and must be
 > re-checked when the code changes. Facts marked **(spec)** come from design docs and describe
 > intended behaviour that may not be built yet. See §11 for the update checklist.
+>
+> **Unresolved items** are marked inline as **[OPEN-nn]** and indexed in **§12**. Run
+> `grep -n "OPEN-" CLAUDE.md` to list every open point. Do not treat an `[OPEN-nn]` value as
+> settled — if you need one to write code, ask rather than pick. Delete the marker and the §12
+> row together when it is decided.
 
 ---
 
@@ -15,7 +20,7 @@ Guidance for Claude Code when working in `legends-and-traitors-backend`.
 - **This repo**: `legends-and-traitors-backend` — Java modular monolith, server-authoritative
 - **Companion repo**: `three-chicken-frontend` — React 18/19 + Vite + TypeScript + TailwindCSS,
   Zustand (WS/session state), Framer Motion (card animations), Howler.js (audio),
-  native WebSocket client with auto-reconnect
+  `@stomp/stompjs` client with auto-reconnect
 - **Genre**: Real-time multiplayer social deduction + tactical turn-based card battle
 - **Inspirations**: *Bang!*, *SanGuoSha (Legends of the Three Kingdoms)*, *Werewolf/Mafia*
 
@@ -49,7 +54,7 @@ Guidance for Claude Code when working in `legends-and-traitors-backend`.
 | Framework | Spring Boot | **4.1.1** (repo-verified: parent POM) | Design docs say "3.x/4.x"; the POM pins 4.1.1 |
 | Primary DB | PostgreSQL | 16-alpine (repo-verified) | Accounts, credentials, $1 upgrade transactions |
 | Cache / real-time | Redis | 7-alpine (repo-verified) | Room state, presence, session TTLs, pub/sub |
-| Real-time gateway | Spring WebSocket | starter present (repo-verified) | Lobby sync, action alerts, live action log |
+| Real-time gateway | **STOMP** over Spring WebSocket | starter present (repo-verified); broker not yet configured | Lobby sync, action alerts, live action log — see §7.2 |
 | Persistence | Spring Data JPA | via starter (repo-verified) | `open-in-view: false` on every profile |
 | Build | Apache Maven | wrapper `./mvnw` (repo-verified) | Maven 3.9+ |
 | Codegen | Lombok | optional dep + annotation processor paths (repo-verified) | `@Getter`/`@Setter` used in config classes |
@@ -76,6 +81,9 @@ docker compose -f docker-compose.dev.yml up -d
 # Run against a non-default profile
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=test
 ```
+
+On Windows PowerShell use `.\mvnw.cmd` in place of `./mvnw`; the POSIX wrapper works in Git Bash,
+WSL, and CI.
 
 **Local ports** (repo-verified from `docker-compose.dev.yml` + `application.yml`):
 
@@ -111,12 +119,16 @@ folder boilerplate in young features.
 3. **Model complexity** — entities plus multiple request/response DTOs need their own `model/`
    (or `dto/`) sub-package.
 
+> ⚠️ **[OPEN-01]** ADR-001 §3.2 writes "`model/` (or `dto/`)", but §4.3 mandates exact names and
+> lists only `model/`. Decide: `model/` only, or `model/` for entities + a sibling `dto/` for
+> wire types. Affects every sub-layered feature.
+
 ### 4.3 Standard Sub-Package Names (use these exact names, always)
 
 `controller/` · `handler/` · `service/` · `repository/` · `model/`
 
 - `controller/` — REST endpoints
-- `handler/` — WebSocket handlers and events
+- `handler/` — STOMP message controllers (`@MessageMapping`) and WS event payloads
 - `service/` — business rules
 - `repository/` — persistence (JPA or Redis)
 - `model/` — entities and DTOs
@@ -133,7 +145,7 @@ folder boilerplate in young features.
 com.seproduction.legendsandtraitors/
 ├── LegendsAndTraitorsBackendApplication.java
 │
-├── config/              <-- Global Spring beans (Cors, WebSocket, Redis, Database, properties)
+├── config/              <-- Global Spring beans (Cors, StompBrokerConfig, Redis, Database, properties)
 ├── common/              <-- Shared utils, base exceptions, global error handlers
 ├── security/            <-- JWT filters, security context helpers
 │
@@ -146,7 +158,7 @@ com.seproduction.legendsandtraitors/
 │
 ├── lobby/               <-- Sub-layered (dual-protocol trigger fires: REST + WS)
 │   ├── controller/      (RoomController.java)
-│   ├── handler/         (LobbyWsHandler.java — /ws/lobby/{roomCode})
+│   ├── handler/         (LobbyStompController.java — @MessageMapping destinations)
 │   ├── service/         (LobbyManager.java, MatchmakingService.java)
 │   ├── repository/      (RoomRedisRepository.java)
 │   └── model/           (RoomState.java, PlayerSlot.java)
@@ -161,6 +173,10 @@ com.seproduction.legendsandtraitors/
     ├── BillingService.java     ($1 lifetime upgrade processing)
     └── WebhookController.java  (POST /api/billing/webhook)
 ```
+
+> ⚠️ **[OPEN-02]** `security/` assumes Spring Security, but **`spring-boot-starter-security` is not
+> in `pom.xml`**. Decide: add the starter, or hand-roll JWT validation. This is load-bearing for
+> §7.2 — STOMP message-level authorization and `Principal` propagation come from Spring Security.
 
 ### 4.6 What Actually Exists Today (repo-verified)
 
@@ -273,6 +289,14 @@ Runs before Turn 1; sets health pool and passive/active abilities.
 - **Faction Scientist**: Hippocrates of Kos (healing/medicine synergy).
 - **Expansion (DLC deck)**: premium roster unlocked by the $1 permanent upgrade.
 
+> ⚠️ **[OPEN-08]** **Starting HP is undefined anywhere.** The draft "sets health pool", §6.4 caps
+> hand size at current HP, and the HUD shows 4–5 hearts — but no rule states base HP, whether the
+> King gets a bonus, or whether HP is per-hero. Blocks the turn loop and discard phase.
+>
+> ⚠️ **[OPEN-18]** Hero roster is 7 named characters (6 Warrior, 1 Scientist) — enough for one
+> 8-player draft only if reuse is allowed. Confirm the full roster and whether the two factions are
+> the complete set.
+
 ### 6.3 Card Categories
 
 | Card | Effect |
@@ -284,6 +308,10 @@ Runs before Turn 1; sets health pool and passive/active abilities.
 | ✨ **Spell** | Disarms, card steals, AoE damage, duels. |
 | 🛡️ **Equipment** | Weapons (range/attacks), Armor (damage reduction), Mounts (distance). |
 
+> ⚠️ **[OPEN-09]** **The range/distance rule is never defined.** Attack says "within range", and
+> Equipment modifies range and distance, but no spec states base range, how seating distance is
+> computed, or whether eliminated players still occupy a seat. Blocks Epic 3 target validation.
+
 ### 6.4 Turn Cycle
 
 1. **Draw phase** — active player draws 2 cards.
@@ -292,6 +320,14 @@ Runs before Turn 1; sets health pool and passive/active abilities.
    Server runs a **10–15s countdown**. On timeout or pass, damage applies. If HP hits 0, a secondary
    prompt opens: `[Use Medicine?]`.
 4. **Discard phase** — hand size must not exceed current HP at end of turn.
+
+> ⚠️ **[OPEN-10]** **Phase count contradiction.** This lists **4** phases; §10.4 Epic 2 commits to a
+> skeleton "cycling **6** phases". Reconcile — either name the missing two (e.g. Judgement, Recovery)
+> or correct the epic.
+>
+> ⚠️ **[OPEN-07]** **Response window is a range, not a value.** "10–15s" appears throughout; the
+> Sprint 1 contract sends `timeLimitSeconds: 15`. Pick one number, and add it as a `game.room`
+> property (there is no timer property today) so it is tunable per profile like `min-players`.
 
 ### 6.5 HUD Contract (informs payload design)
 
@@ -324,27 +360,104 @@ Runs before Turn 1; sets health pool and passive/active abilities.
   "hostId": "guest_948201" }
 ```
 
-### 7.2 WebSocket — `/ws/lobby/{roomCode}`
+> ⚠️ **[OPEN-14]** **`/api/auth/register` and `/api/auth/login` have no contract.** Only `guest` and
+> `rooms` are specified in the Sprint 1 baseline. Request/response shapes, validation rules, and the
+> email-verification flow (Epic 5) are all undefined.
+>
+> ⚠️ **[OPEN-15]** **No payment provider named**, so `POST /api/billing/webhook` has no payload,
+> no signature-verification scheme, and no idempotency rule. Blocks Epic 7.
+>
+> ⚠️ **[OPEN-16]** **`joinUrl` hardcodes `http://localhost:5173`.** No config property exists for the
+> frontend base URL — add one (e.g. `game.frontend.base-url`) before this ships to prod.
 
-**Client → Server**
+### 7.2 WebSocket — STOMP over Spring WebSocket
 
-| Action | Payload |
+**Transport decision (2026-09-10):** STOMP, via `@EnableWebSocketMessageBroker`. This supersedes the
+raw `/ws/lobby/{roomCode}` handler described in the Sprint 1 baseline. Candidate for **ADR-002**.
+
+> **Frontend impact — needs re-confirmation.** The approved Sprint 1 contract
+> (`Lobby WebSocket Protocol & REST APIs.md`) specified a native WebSocket client, a room-scoped
+> connect URL, and auth via the first `JOIN_ROOM` payload. All three change under STOMP. See the
+> delta table at the end of this section and re-agree with the frontend team before implementing.
+
+**Broker setup**
+
+| Setting | Value |
 | --- | --- |
-| `JOIN_ROOM` | `{ token, displayName, color }` |
-| `TOGGLE_READY` | `{ isReady }` |
-| `SEND_CHAT` | `{ message }` |
-| `UPDATE_ROLES` | `{ roles: { king, loyalist, rebel, spy } }` |
-| `START_GAME` | — |
+| STOMP endpoint | `/ws` — single endpoint; the room is no longer in the connect URL |
+| Application prefix | `/app` — client → server |
+| Broker prefix | `/topic` — server → room broadcast |
+| User prefix | `/user` — server → single player |
+| Broker | Simple in-memory broker. Scaling past one node requires a relay (RabbitMQ/ActiveMQ). |
+
+> ⚠️ **[OPEN-03]** **The destination scheme above is a proposed default, not a ratified contract.**
+> No source spec names these paths — they follow the conventional Spring layout. Needs frontend
+> sign-off before either side codes against it.
+>
+> ⚠️ **[OPEN-06]** **Redis's role under STOMP is now unclear.** §2 lists Redis for "pub/sub", which
+> was the fan-out path for raw WebSocket. With the in-memory simple broker, STOMP does not use Redis
+> at all. Decide: Redis for room state only (broker stays in-memory, single node), or add a relay
+> for multi-node. Note Redis is **not** a supported Spring STOMP relay — that needs RabbitMQ/ActiveMQ.
+
+**Authentication**
+
+The JWT travels in the **CONNECT frame** (`Authorization: Bearer <token>`), validated by a
+`ChannelInterceptor` on the inbound channel, which binds the `Principal`. This is what makes
+`/user/**` destinations and message-level security work, and is the main reason to adopt STOMP —
+do **not** fall back to authenticating inside the first application message.
+
+> ⚠️ **[OPEN-04]** **This contradicts an approved contract.** `Lobby WebSocket Protocol & REST
+> APIs.md` §2.1 states auth happens "via the first payload: `JOIN_ROOM`". Moving it to CONNECT is
+> the recommendation, not a ratified decision — it needs frontend agreement and a revision of that
+> baseline doc. Depends on **[OPEN-02]** (Spring Security present or not).
+
+**Client → Server (`/app`)**
+
+| Destination | Payload | Notes |
+| --- | --- | --- |
+| `/app/lobby/{roomCode}/join` | `{ displayName, color }` | Token comes from CONNECT, not the body |
+| `/app/lobby/{roomCode}/ready` | `{ isReady }` | |
+| `/app/lobby/{roomCode}/chat` | `{ message }` | |
+| `/app/lobby/{roomCode}/roles` | `{ roles: { king, loyalist, rebel, spy } }` | Host only |
+| `/app/lobby/{roomCode}/start` | — | Host only; requires `canStart` |
+
+`canStart` must be evaluated against injected `GameRoomProperties`, **not** a hardcoded 4–8 range:
+`min-players` is overridden to **2** in dev/test, and premium rooms raise `max-players` to **10**.
+
+> ⚠️ **[OPEN-17]** **`UPDATE_ROLES` has no validation rule.** The host sets king/loyalist/rebel/spy
+> counts freely. Undefined: whether the counts must sum to the current player count or to
+> `maxPlayers`, what the legal distribution is per player count, and what happens when a player
+> leaves after roles are set.
 
 **Server → Client**
 
-| Broadcast | Contents |
+| Destination | Event | Contents |
+| --- | --- | --- |
+| `/topic/lobby/{roomCode}` | `ROOM_STATE_UPDATED` | roomCode, hostId, minPlayers, maxPlayers, allReady, canStart, players[], roleConfig |
+| `/topic/lobby/{roomCode}` | `CHAT_MESSAGE` | senderId, senderName, senderColor, message, ISO timestamp |
+| `/topic/lobby/{roomCode}` | `GAME_STARTED` | roomCode, turnPlayerId |
+| `/topic/lobby/{roomCode}` | `GAME_LOG_ENTRY` | id, timestamp, actorName, actionType, cardName, targetName, description |
+| `/user/queue/alerts` | `ACTION_ALERT` | prompt, timeLimitSeconds, allowedResponses — delivered only to the target player |
+
+Clients subscribe to `/topic/lobby/{roomCode}` plus `/user/queue/alerts` after CONNECT.
+
+**Payload bodies are unchanged** from the Sprint 1 contract — only routing and auth move. The
+`event` discriminator is redundant under STOMP (the destination already routes) but is retained in
+broadcast bodies so existing frontend switch logic keeps working.
+
+> ⚠️ **[OPEN-05]** **`ACTION_ALERT.targetPlayerId` is now redundant** — `/user/queue/alerts` already
+> delivers to exactly one player. Decide whether to keep the field (contract stability) or drop it
+> (no dead data). Same question for the retained `event` discriminator above.
+
+**Deltas from the Sprint 1 baseline**
+
+| Baseline | Under STOMP |
 | --- | --- |
-| `ROOM_STATE_UPDATED` | Full roster, host identity, ready states, role distribution, start eligibility |
-| `CHAT_MESSAGE` | Sender id, name, avatar color, text, ISO timestamp |
-| `GAME_STARTED` | Signals lobby → arena transition |
-| `GAME_LOG_ENTRY` | Actor, target, card, narrative description |
-| `ACTION_ALERT` | Target player id, prompt, timeout seconds, allowed buttons (e.g. `["DODGE","PASS"]`) |
+| Connect `/ws/lobby/{roomCode}` | Connect `/ws`, then subscribe `/topic/lobby/{roomCode}` |
+| Auth in first `JOIN_ROOM` payload | Auth in CONNECT frame header |
+| `ACTION_ALERT` broadcast carrying `targetPlayerId` | Sent to `/user/queue/alerts`; no broadcast, no client-side filtering |
+| `{ "action": ... }` discriminator | Action encoded in the destination |
+| Native browser `WebSocket` | `@stomp/stompjs` client |
 
 ---
 
@@ -356,6 +469,15 @@ Runs before Turn 1; sets health pool and passive/active abilities.
 - **$1.00 permanent lifetime upgrade** — raises room capacity from **8 → 10 players** and unlocks
   the **DLC character deck**. Purchases and transactions persist in PostgreSQL.
 
+> ⚠️ **[OPEN-12]** **Argon2 vs BCrypt is unresolved** — the spec says "Argon2/BCrypt". Pick one;
+> it determines the encoder bean and whether an extra dependency is needed.
+>
+> ⚠️ **[OPEN-13]** **Premium capacity mechanism undefined.** `game.room.max-players` is a single
+> global property set to 8, but premium rooms need 10. Decide: is 8 the free-tier cap with 10 as a
+> separate `max-players-premium` property, is capacity stored per-room at creation, and does it key
+> off the host's premium status or any player's? §7.2's `ROOM_STATE_UPDATED` serializes `maxPlayers`
+> per room, which implies per-room resolution.
+
 ---
 
 ## 9. Decided Edge Cases (spec — implement to these)
@@ -365,6 +487,14 @@ Runs before Turn 1; sets health pool and passive/active abilities.
 | **Spike 1 — Response timers** | Server-side `ScheduledExecutorService` opens a 10–15s window. On timeout or disconnect it auto-resolves to **"Pass / Take Damage"**. |
 | **Spike 2 — Disconnect rule** | Disconnected players **cannot reconnect**. After a **>5s grace**, the player is eliminated, their hand is discarded to the graveyard, and victory conditions are evaluated immediately. |
 | **Spike 3 — DLC deck injection** | Card pools live in JSON (`base_deck.json`, `dlc_deck.json`). If **any** player in the room is premium, the DLC character pool is merged into the draft generator. |
+
+> ⚠️ **[OPEN-11]** **Direct contradiction with the roadmap.** Spike 2 says disconnected players
+> **cannot reconnect** and are eliminated after a >5s grace. §10.4 Epic 6 commits to a **"Rejoin"**
+> story. One of the two is wrong. If Rejoin survives, the grace window, held-hand handling, and
+> "eliminate immediately" rule all need rewriting.
+>
+> ⚠️ **[OPEN-19]** Deck JSON location unspecified — presumably `src/main/resources/`, and whether
+> they are classpath resources or externally mounted config is undecided.
 
 ---
 
@@ -402,6 +532,10 @@ uploads `target/surefire-reports/`. **Tests need a live Postgres and Redis** —
 - Branch names: `<type>/LT-<ticket>/<short-description>` — e.g. `chore/LT-57/CLAUDEmd-setup`.
 - Commits are Conventional Commits carrying the Taiga ticket: `feat: LT-56 enable multi environment profiles`.
 
+> ⚠️ **[OPEN-20]** This convention was **inferred from three commits**, not from a written team
+> standard. Confirm it, and note that source docs use two ticket prefixes — `LT-` in git history,
+> `TG-`/`EP-` in the Notion specs. Settle on one.
+
 ### 10.4 Roadmap — 7 Epics / 33 Stories
 
 Tracked in Taiga.io and the Notion engineering wiki.
@@ -432,6 +566,9 @@ When adding code:
 - [ ] Config is bound via `@ConfigurationProperties` and registered in `ApplicationPropertiesConfig`.
 - [ ] No secrets committed; prod values come from env vars.
 - [ ] Game rules resolve **server-side** — the client is never authoritative.
+- [ ] STOMP destinations follow `/app/lobby/{roomCode}/{action}` and `/topic/lobby/{roomCode}` (§7.2).
+- [ ] Targeted sends use `/user/**` with the Principal bound at CONNECT — never broadcast-plus-filter.
+- [ ] Player-count checks read `GameRoomProperties`, never a hardcoded 4–8.
 - [ ] Long-lived/blocking work assumes virtual threads; avoid pinning (`synchronized` around I/O).
 - [ ] Tests run green against local Postgres + Redis.
 
@@ -442,3 +579,54 @@ When updating this file:
 - [ ] Re-verify §5 tables after any `application*.yml` change.
 - [ ] Promote a **(spec)** section to **(repo-verified)** once implemented, and correct it to match
       the code as built.
+- [ ] When an **[OPEN-nn]** is decided, delete the inline callout **and** its §12 row together.
+
+---
+
+## 12. Open Questions Register
+
+Every unresolved point in this file, indexed. `grep -n "OPEN-" CLAUDE.md` finds them inline.
+**Nothing here is settled** — if code needs one of these answered, ask rather than assume.
+
+### 12.1 Blocking — resolve before the relevant epic starts
+
+| ID | § | Question | Blocks |
+| --- | --- | --- | --- |
+| **OPEN-11** | §9 | Spike 2 says reconnect is impossible; Epic 6 has a "Rejoin" story. **Direct contradiction.** | Epic 6 |
+| **OPEN-08** | §6.2 | Starting HP is defined nowhere. Base value? King bonus? Per-hero? | Epics 2, 3, 4 |
+| **OPEN-09** | §6.3 | Range/distance rule undefined, though Equipment modifies it. | Epic 3 |
+| **OPEN-04** | §7.2 | CONNECT-frame auth contradicts the approved Sprint 1 contract §2.1. | Epic 1, FE contract |
+| **OPEN-03** | §7.2 | STOMP destination scheme is a proposed default, unratified. | Epic 1, FE contract |
+| **OPEN-02** | §4.5 | `spring-boot-starter-security` absent — add it, or hand-roll JWT? | OPEN-04, Epic 5 |
+| **OPEN-10** | §6.4 | Turn cycle lists 4 phases; Epic 2 commits to 6. **Contradiction.** | Epic 2 |
+
+### 12.2 Should resolve — design gaps with a workable default
+
+| ID | § | Question |
+| --- | --- | --- |
+| **OPEN-07** | §6.4 | Response window "10–15s" is a range. Pick a value; add a `game.room` timer property. |
+| **OPEN-13** | §8 | Premium 10-player capacity vs the global `max-players: 8`. Per-room or second property? |
+| **OPEN-17** | §7.2 | `UPDATE_ROLES` has no validation rule (sum to player count? legal spreads?). |
+| **OPEN-06** | §7.2 | Redis's role under STOMP — room state only, or a broker relay for multi-node? |
+| **OPEN-14** | §7.1 | `/api/auth/register` and `/login` have no request/response contract. |
+| **OPEN-15** | §7.1 | No payment provider named; webhook payload and signature scheme undefined. |
+| **OPEN-12** | §8 | Argon2 or BCrypt for password hashing? Spec says "Argon2/BCrypt". |
+| **OPEN-01** | §4.2 | `model/` only, or `model/` + a sibling `dto/`? ADR-001 and §4.3 disagree. |
+
+### 12.3 Minor — tidy before release
+
+| ID | § | Question |
+| --- | --- | --- |
+| **OPEN-16** | §7.1 | `joinUrl` hardcodes `localhost:5173`; needs a frontend-base-URL property. |
+| **OPEN-05** | §7.2 | Drop now-redundant `targetPlayerId` / `event` fields, or keep for contract stability? |
+| **OPEN-18** | §6.2 | Hero roster lists only 7 characters across 2 factions — complete? |
+| **OPEN-19** | §9 | Deck JSON location and whether it is classpath or external config. |
+| **OPEN-20** | §10.3 | Branch convention inferred, not ratified; `LT-` vs `TG-`/`EP-` ticket prefixes clash. |
+
+### 12.4 Resolved (kept for traceability)
+
+| Was | Resolution |
+| --- | --- |
+| Base package `com.threechicken.game` vs `com.seproduction.legendsandtraitors` | ADR-001 + code win — see §4 |
+| Spring Boot "3.x/4.x" | POM pins **4.1.1** — see §2 |
+| STOMP vs raw WebSocket | **STOMP**, decided 2026-09-10 — see §7.2 |
