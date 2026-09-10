@@ -1,0 +1,31 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/three_chicken}
+    username: ${SPRING_DATASOURCE_USERNAME:dev}
+    password: ${SPRING_DATASOURCE_PASSWORD:devpassword}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+
+game:
+  room:
+    min-players: 2
+
+security:
+  jwt:
+    secret: "ThreeChickenSuperSecretTestJwtSigningKeyForLocalTestingPurposesOnly123!"
+
+logging:
+  level:
+    root: WARN
+    com.seproduction.legendsandtraitors: DEBUG
+    org.springframework.web: WARN

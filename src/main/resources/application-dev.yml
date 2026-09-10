@@ -1,0 +1,28 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/three_chicken
+    username: dev
+    password: devpassword
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+game:
+  room:
+    min-players: 2
+
+security:
+  jwt:
+    secret: "ThreeChickenSuperSecretDevJwtSigningKeyForLocalDevelopmentOnly123456!"
