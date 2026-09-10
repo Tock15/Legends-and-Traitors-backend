@@ -4,26 +4,24 @@ server:
 spring:
   application:
     name: legends-and-traitors-backend
+  profiles:
+    active: dev
   threads:
     virtual:
       enabled: true
+  mvc:
+    problemdetails:
+      enabled: true
 
-  datasource:
-    url: jdbc:postgresql://localhost:5432/three_chicken
-    username: dev
-    password: devpassword
-    driver-class-name: org.postgresql.Driver
+game:
+  room:
+    code-length: 6
+    min-players: 4
+    max-players: 8
+    ttl-seconds: 1800
+    kick-ban-duration-minutes: 5
+    afk-threshold-seconds: 60
 
-  jpa:
-    open-in-view: false
-    hibernate:
-      ddl-auto: update
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true
-
-  data:
-    redis:
-      host: localhost
-      port: 6379
+security:
+  jwt:
+    expiration-ms: 86400000 # 24 hours
