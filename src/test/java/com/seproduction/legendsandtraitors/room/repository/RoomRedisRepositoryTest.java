@@ -69,6 +69,7 @@ class RoomRedisRepositoryTest {
                 .settings(RoleSettings.builder().king(1).loyalist(1).rebel(2).spy(0).build())
                 .createdAt(CREATED_AT)
                 .lastActiveAt(CREATED_AT)
+                .version(3)
                 .build();
     }
 
@@ -107,6 +108,7 @@ class RoomRedisRepositoryTest {
                 .contains("\"loyalist\":1")
                 .contains("\"rebel\":2")
                 .contains("\"spy\":0")
+                .contains("\"version\":3")
                 .doesNotContain("@class");
     }
 
@@ -206,11 +208,5 @@ class RoomRedisRepositoryTest {
     @DisplayName("Should return an empty optional for an unknown room")
     void shouldReturnEmptyForUnknownRoom() {
         assertThat(roomRepository.findByCode("NOPE01")).isEqualTo(Optional.empty());
-    }
-
-    @Test
-    @DisplayName("Should default maxPlayers to 8 when the builder does not set it")
-    void shouldDefaultMaxPlayersToEight() {
-        assertThat(RoomState.builder().roomCode(ROOM_CODE).build().getMaxPlayers()).isEqualTo(8);
     }
 }

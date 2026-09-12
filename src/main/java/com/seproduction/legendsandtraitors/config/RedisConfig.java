@@ -1,12 +1,7 @@
 package com.seproduction.legendsandtraitors.config;
 
-import com.seproduction.legendsandtraitors.room.model.RoomState;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.serializer.JacksonJsonRedisSerializer;
-import org.springframework.data.redis.serializer.RedisSerializer;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.cfg.DateTimeFeature;
@@ -15,13 +10,20 @@ import tools.jackson.databind.json.JsonMapper;
 @Configuration
 public class RedisConfig {
 
+    /**
+     * Codec shared by every Redis-backed feature repository, which pair it with the
+     * auto-configured {@code StringRedisTemplate}.
+     *
+     * <p>Registering a typed {@code RedisTemplate} per domain here instead would drag every
+     * feature entity into global config and turn this class into a hub (ADR-001 §4.4/§4.5).
+     *
+     * <p>Not exposed as a bare {@code ObjectMapper}/{@code JsonMapper} bean on purpose: either
+     * type would compete with — or back off — Spring Boot's auto-configured primary HTTP mapper,
+     * whose date handling differs from the format below.
+     */
     @Bean
-    public RedisTemplate<String, RoomState> roomRedisTemplate(RedisConnectionFactory connectionFactory) {
-        RedisTemplate<String, RoomState> template = new RedisTemplate<>();
-        template.setConnectionFactory(connectionFactory);
-        template.setKeySerializer(RedisSerializer.string());
-        template.setValueSerializer(new JacksonJsonRedisSerializer<>(redisObjectMapper(), RoomState.class));
-        return template;
+    public RedisJsonCodec redisJsonCodec() {
+        return new RedisJsonCodec(redisObjectMapper());
     }
 
     private ObjectMapper redisObjectMapper() {
