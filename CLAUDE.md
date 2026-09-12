@@ -6,9 +6,9 @@ Guidance for Claude Code when working in `legends-and-traitors-backend`.
 > re-checked when the code changes. Facts marked **(spec)** come from design docs and describe
 > intended behaviour that may not be built yet.
 >
-> Game rules, configuration detail, the conventions checklist, workflow detail, and **all
-> unresolved questions** are parked in **`temp.md`**. Check there before assuming something is
-> undecided — 20 open points are tracked in `temp.md` §1.
+> Game rules, roles, and the epic roadmap live in
+> `ai-docs/Three_Chicken_Master_Engineering_Wiki_Context.md`. Story scope and open questions are
+> tracked in Taiga (`LT-` tickets) and the Notion engineering wiki — see §1.2.
 
 ---
 
@@ -31,7 +31,8 @@ Guidance for Claude Code when working in `legends-and-traitors-backend`.
 5. Targeted players get a tight **10–15s response window** to react (*Dodge*, *Medicine*).
 6. Match ends when King/Loyalists, Rebels, or the solo Spy meet victory conditions.
 
-Full rules — roles, victory matrix, draft, card types, turn cycle: `temp.md` §3.
+Full rules — roles, victory matrix, draft, card types, turn cycle:
+`ai-docs/Three_Chicken_Master_Engineering_Wiki_Context.md` §2.
 
 ### 1.2 External Resources
 
@@ -64,7 +65,9 @@ Test starters present (repo-verified): `data-jpa-test`, `data-redis-test`, `webm
 
 **Maven coordinates** (repo-verified): `com.seproduction:legends-and-traitors-backend:0.0.1-SNAPSHOT`
 
-Profiles, `game.room.*` / `security.jwt` properties, and the profile matrix: `temp.md` §2.
+Profiles and the full `game.room.*` / `security.jwt` property matrix live in
+`src/main/resources/application{,-dev,-test,-prod}.yml`, bound by `config/GameRoomProperties.java`
+and `config/JwtProperties.java`. Read those rather than trusting a copy of the values.
 
 ---
 
@@ -170,7 +173,8 @@ com.seproduction.legendsandtraitors/
 A feature moves from Stage 1 to Stage 2 in place — same package, files relocated into the §4.3
 sub-packages. Never create a sub-package before its trigger fires.
 
-Current state of the tree, planned feature packages, and rejected layouts: `temp.md` §7.
+The live tree is `src/main/java/com/seproduction/legendsandtraitors/` — read it for the current set
+of feature packages before adding one.
 
 ---
 
@@ -255,8 +259,9 @@ broadcast bodies so existing frontend switch logic keeps working.
 | `{ "action": ... }` discriminator | Action encoded in the destination |
 | Native browser `WebSocket` | `@stomp/stompjs` client |
 
-> This section is **not yet ratified with the frontend team** — see `temp.md` §1 (OPEN-03, OPEN-04)
-> and §9 before coding against it.
+> This section is **not yet ratified with the frontend team** — confirm the destinations, the
+> CONNECT auth header, and the `/user/queue/alerts` routing with the `three-chicken-frontend` team
+> before coding against it.
 
 ---
 
@@ -279,4 +284,6 @@ graph TD
 
 Routing: `/` → static frontend build, `/api/*` → backend, `/ws/*` → STOMP gateway.
 
-CI, branching convention, and the epic roadmap: `temp.md` §8.
+CI lives in `.github/workflows/backend-ci.yml`; the epic roadmap is
+`ai-docs/Three_Chicken_Master_Engineering_Wiki_Context.md` §6 plus Taiga. Branch naming follows the
+existing git history: `<type>/LT-<id>/<short-description>`.
