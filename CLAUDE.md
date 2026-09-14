@@ -9,6 +9,9 @@ Guidance for Claude Code when working in `legends-and-traitors-backend`.
 > Game rules, roles, and the epic roadmap live in
 > `ai-docs/Three_Chicken_Master_Engineering_Wiki_Context.md`. Story scope and open questions are
 > tracked in Taiga (`LT-` tickets) and the Notion engineering wiki — see §1.2.
+>
+> Companion AI steering for Google Antigravity lives in `AGENT.md` and `.agents/rules/`, adhering
+> to this file as the unified Single Source of Truth (SSoT).
 
 ---
 
