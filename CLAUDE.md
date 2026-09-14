@@ -290,3 +290,32 @@ Routing: `/` → static frontend build, `/api/*` → backend, `/ws/*` → STOMP 
 CI lives in `.github/workflows/backend-ci.yml`; the epic roadmap is
 `ai-docs/Three_Chicken_Master_Engineering_Wiki_Context.md` §6 plus Taiga. Branch naming follows the
 existing git history: `<type>/LT-<id>/<short-description>`.
+
+---
+
+## 7. Code Style
+
+### 7.1 Comments — short and rare
+
+**Do not write a lot of comments.** Default to none: clear names and small methods carry the
+meaning. When a comment genuinely earns its place, make it **one short line**.
+
+Write a comment only when it says something the code cannot:
+
+- a non-obvious **why** — a chosen constant, a workaround, an ordering that matters
+- a **caveat** that would otherwise bite a caller — race window, best-effort guarantee, TTL
+- brief **Javadoc** on a public service method whose contract the signature does not already state
+
+Do not write:
+
+- comments that restate the line below them (`// increment the counter`)
+- section banners, decorative separators, `// --- getters ---` dividers
+- commented-out code — delete it, git remembers
+- per-field prose on DTOs, entities and config classes when the field name already says it
+- step-by-step narration of an obvious method body
+
+Tests follow the same rule: `@DisplayName` already describes the case, so a comment above the
+assertion usually just repeats it.
+
+Files written before this rule carry longer Javadoc. Trim opportunistically when you are already
+editing them — do not open a sweep just to remove comments.
