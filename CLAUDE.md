@@ -58,7 +58,7 @@ Full rules — roles, victory matrix, draft, card types, turn cycle:
 | Framework | Spring Boot | **4.1.1** (repo-verified: parent POM) | Design docs say "3.x/4.x"; the POM pins 4.1.1 |
 | Primary DB | PostgreSQL | 16-alpine (repo-verified) | Accounts, credentials, $1 upgrade transactions |
 | Cache / real-time | Redis | 7-alpine (repo-verified) | Room state, presence, session TTLs |
-| Real-time gateway | **STOMP** over Spring WebSocket | starter present (repo-verified); broker not yet configured | Lobby sync, action alerts, live action log — see §5.2 |
+| Real-time gateway | **STOMP** over Spring WebSocket | broker configured (repo-verified: `config/WebSocketConfig.java`) | Endpoint + CONNECT auth live; no `@MessageMapping` handlers yet — see §5.2 |
 | Persistence | Spring Data JPA | via starter (repo-verified) | `open-in-view: false` on every profile |
 | Build | Apache Maven | wrapper `./mvnw` (repo-verified) | Maven 3.9+ |
 | Codegen | Lombok | optional dep + annotation processor paths (repo-verified) | `@Getter`/`@Setter` used in config classes |
