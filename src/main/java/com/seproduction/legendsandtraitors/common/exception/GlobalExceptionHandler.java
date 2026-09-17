@@ -1,5 +1,6 @@
 package com.seproduction.legendsandtraitors.common.exception;
 
+import com.seproduction.legendsandtraitors.security.InvalidJwtException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -36,6 +37,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final String TIMESTAMP_PROPERTY = "timestamp";
     private static final String INVALID_PARAMS_PROPERTY = "invalidParams";
     private static final String VALIDATION_FAILED_CODE = "VALIDATION_FAILED";
+    private static final String INVALID_TOKEN_CODE = "INVALID_TOKEN";
     private static final String INTERNAL_SERVER_ERROR_CODE = "INTERNAL_SERVER_ERROR";
 
     /**
@@ -56,6 +58,30 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         problemDetail.setInstance(URI.create(request.getRequestURI()));
 
         return ResponseEntity.status(ex.getStatus()).body(problemDetail);
+    }
+
+    /**
+     * Handles authentication failures caused by invalid, expired, or malformed JWT tokens.
+     * Maps to HTTP 401 UNAUTHORIZED with sanitized error detail.
+     *
+     * @param ex      the caught invalid JWT exception
+     * @param request the current HTTP servlet request
+     * @return a structured RFC-7807 problem detail response entity
+     */
+    @ExceptionHandler(InvalidJwtException.class)
+    public ResponseEntity<ProblemDetail> handleInvalidJwt(InvalidJwtException ex, HttpServletRequest request) {
+        log.debug("Rejected token: {}", ex.getMessage());
+
+        ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNAUTHORIZED,
+                "Invalid or expired token"
+        );
+        problemDetail.setTitle("Unauthorized");
+        problemDetail.setProperty(CODE_PROPERTY, INVALID_TOKEN_CODE);
+        problemDetail.setProperty(TIMESTAMP_PROPERTY, Instant.now());
+        problemDetail.setInstance(URI.create(request.getRequestURI()));
+
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(problemDetail);
     }
 
     /**

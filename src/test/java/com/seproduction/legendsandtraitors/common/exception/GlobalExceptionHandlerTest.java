@@ -1,5 +1,6 @@
 package com.seproduction.legendsandtraitors.common.exception;
 
+import com.seproduction.legendsandtraitors.security.InvalidJwtException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -160,6 +161,34 @@ class GlobalExceptionHandlerTest {
     }
 
     @Nested
+    @DisplayName("JWT Security Exception Tests")
+    class JwtExceptionTests {
+
+        @Test
+        @DisplayName("Should answer a rejected token with 401 problem+json")
+        void shouldRenderUnauthorizedProblemDetail() throws Exception {
+            mockMvc.perform(get("/test/rejecting"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                    .andExpect(jsonPath("$.status").value(401))
+                    .andExpect(jsonPath("$.title").value("Unauthorized"))
+                    .andExpect(jsonPath("$.code").value("INVALID_TOKEN"))
+                    .andExpect(jsonPath("$.detail").value("Invalid or expired token"))
+                    .andExpect(jsonPath("$.instance").value("/test/rejecting"))
+                    .andExpect(jsonPath("$.timestamp").exists());
+        }
+
+        @Test
+        @DisplayName("Should not leak which verification step failed")
+        void shouldNotLeakFailedCheck() throws Exception {
+            mockMvc.perform(get("/test/rejecting"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.detail").value("Invalid or expired token"))
+                    .andExpect(content().string(not(containsString("signature"))));
+        }
+    }
+
+    @Nested
     @DisplayName("Unhandled Exception Tests")
     class UnhandledExceptionTests {
 
@@ -220,6 +249,11 @@ class GlobalExceptionHandlerTest {
         @PostMapping("/test/validate-dto")
         public void validateDto(@Valid @RequestBody TestRequestDto dto) {
             // No-op for testing validation
+        }
+
+        @GetMapping("/test/rejecting")
+        public void throwInvalidJwt() {
+            throw new InvalidJwtException("JWT signature does not match");
         }
 
         @GetMapping("/test/unhandled-error")
