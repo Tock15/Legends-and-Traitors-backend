@@ -18,6 +18,9 @@ game:
     code-length: 6
     min-players: 4
     max-players: 8
+    min-capacity: 4
+    max-capacity: 10
+    join-base-url: http://localhost:5173
     ttl-seconds: 1800
     kick-ban-duration-minutes: 5
     afk-threshold-seconds: 60

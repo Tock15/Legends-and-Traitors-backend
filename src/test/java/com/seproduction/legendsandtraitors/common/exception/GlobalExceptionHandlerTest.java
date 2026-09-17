@@ -125,6 +125,20 @@ class GlobalExceptionHandlerTest {
                     .andExpect(jsonPath("$.instance").value("/test/invalid-action"))
                     .andExpect(jsonPath("$.timestamp").exists());
         }
+
+        @Test
+        @DisplayName("Throwing InvalidRequestException returns 400 Bad Request naming the broken rule")
+        void shouldHandleInvalidRequestException() throws Exception {
+            mockMvc.perform(get("/test/invalid-request"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.title").value("Invalid Request"))
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.detail").value("maxPlayers must be between 4 and 10"))
+                    .andExpect(jsonPath("$.instance").value("/test/invalid-request"))
+                    .andExpect(jsonPath("$.timestamp").exists());
+        }
     }
 
     @Nested
@@ -244,6 +258,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/test/invalid-action")
         public void throwInvalidAction() {
             throw new InvalidLobbyActionException("Cannot start game: not all players are ready.");
+        }
+
+        @GetMapping("/test/invalid-request")
+        public void throwInvalidRequest() {
+            throw new InvalidRequestException("maxPlayers must be between 4 and 10");
         }
 
         @PostMapping("/test/validate-dto")

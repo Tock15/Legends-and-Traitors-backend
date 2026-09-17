@@ -29,6 +29,27 @@ public class GameRoomProperties {
     private int maxPlayers = 8;
 
     /**
+     * Smallest capacity a client may request when creating a room (default: 4).
+     *
+     * <p>Not the same rule as {@code minPlayers}, which gates start eligibility and drops to 2 in
+     * dev/test: the capacity bounds are deliberately left uniform across every profile.
+     */
+    private int minCapacity = 4;
+
+    /**
+     * Largest capacity a client may request when creating a room (default: 10).
+     *
+     * <p>Only the premium tier is meant to reach 10, but nothing reads {@code isPremium} yet, so
+     * any authenticated caller can request the ceiling.
+     */
+    private int maxCapacity = 10;
+
+    /**
+     * Frontend origin the shareable lobby invite URL is built on (default: the Vite dev server).
+     */
+    private String joinBaseUrl = "http://localhost:5173";
+
+    /**
      * Idle TTL in seconds before Redis deletes an abandoned room session (default: 1800s = 30m).
      */
     private long ttlSeconds = 1800;

@@ -41,7 +41,8 @@ public class RoomState {
     private Instant lastActiveAt;
 
     /**
-     * Optimistic-concurrency stamp, reserved for the conditional writes planned in LT-27.
+     * Optimistic-concurrency stamp, reserved for the conditional writes planned for the
+     * lobby mutation handlers.
      *
      * <p>It is carried through the stored document so the mechanism can be added without a schema
      * change, but <strong>nothing increments or checks it yet</strong> — the repository's save is
