@@ -209,4 +209,30 @@ class RoomRedisRepositoryTest {
     void shouldReturnEmptyForUnknownRoom() {
         assertThat(roomRepository.findByCode("NOPE01")).isEqualTo(Optional.empty());
     }
+
+    @Test
+    @DisplayName("Should claim a free code, storing the room under the configured TTL")
+    void shouldClaimFreeCode() {
+        boolean claimed = roomRepository.saveIfAbsent(sampleRoom());
+
+        assertThat(claimed).isTrue();
+        assertThat(roomRepository.findByCode(ROOM_CODE)).hasValue(sampleRoom());
+        assertThat(storedTtlSeconds())
+                .isGreaterThan(gameRoomProperties.getTtlSeconds() - 60)
+                .isLessThanOrEqualTo(gameRoomProperties.getTtlSeconds());
+    }
+
+    @Test
+    @DisplayName("Should refuse a taken code without touching the room already stored")
+    void shouldRefuseTakenCode() {
+        roomRepository.save(sampleRoom());
+        String jsonBeforeClaim = storedJson();
+        RoomState otherHostRoom = sampleRoom();
+        otherHostRoom.setHostId("guest_111111");
+
+        boolean claimed = roomRepository.saveIfAbsent(otherHostRoom);
+
+        assertThat(claimed).isFalse();
+        assertThat(storedJson()).isEqualTo(jsonBeforeClaim);
+    }
 }

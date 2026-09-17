@@ -23,12 +23,19 @@ class GlobalExceptionHandlerTest {
 
     private static final String FAILED_CHECK = "JWT signature does not match";
 
+    private static final String BROKEN_RULE = "maxPlayers must be between 4 and 10";
+
     @RestController
     static class RejectingController {
 
         @GetMapping("/test/rejecting")
         void reject() {
             throw new InvalidJwtException(FAILED_CHECK);
+        }
+
+        @GetMapping("/test/invalid-request")
+        void rejectRequest() {
+            throw new InvalidRequestException(BROKEN_RULE);
         }
     }
 
@@ -54,5 +61,15 @@ class GlobalExceptionHandlerTest {
     void shouldNotLeakFailedCheck() {
         assertThat(getRejecting()).bodyJson()
                 .extractingPath("$.detail").asString().doesNotContain("signature");
+    }
+
+    @Test
+    @DisplayName("Should answer a rejected request with 400 problem+json naming the broken rule")
+    void shouldRenderBadRequestProblemDetail() {
+        assertThat(mockMvc.get().uri("/test/invalid-request").exchange())
+                .hasStatus(HttpStatus.BAD_REQUEST)
+                .hasContentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .bodyJson()
+                .extractingPath("$.detail").isEqualTo(BROKEN_RULE);
     }
 }

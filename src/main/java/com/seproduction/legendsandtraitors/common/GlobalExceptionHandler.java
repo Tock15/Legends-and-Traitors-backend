@@ -17,4 +17,10 @@ class GlobalExceptionHandler {
         log.debug("Rejected token: {}", e.getMessage());
         return ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, "Invalid or expired token");
     }
+
+    @ExceptionHandler(InvalidRequestException.class)
+    ProblemDetail onInvalidRequest(InvalidRequestException e) {
+        // Echoed unlike a token failure: the message states the rule the caller has to satisfy.
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
 }

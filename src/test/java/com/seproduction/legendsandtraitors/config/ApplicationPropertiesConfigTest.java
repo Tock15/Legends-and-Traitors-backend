@@ -28,6 +28,9 @@ class ApplicationPropertiesConfigTest {
         assertThat(gameRoomProperties.getCodeLength()).isEqualTo(6);
         assertThat(gameRoomProperties.getMinPlayers()).isEqualTo(2); // overridden for tests/dev
         assertThat(gameRoomProperties.getMaxPlayers()).isEqualTo(8);
+        assertThat(gameRoomProperties.getMinCapacity()).isEqualTo(4); // capacity bounds stay uniform
+        assertThat(gameRoomProperties.getMaxCapacity()).isEqualTo(10);
+        assertThat(gameRoomProperties.getJoinBaseUrl()).isEqualTo("http://localhost:5173");
         assertThat(gameRoomProperties.getTtlSeconds()).isEqualTo(1800);
         assertThat(gameRoomProperties.getKickBanDurationMinutes()).isEqualTo(5);
         assertThat(gameRoomProperties.getAfkThresholdSeconds()).isEqualTo(60);

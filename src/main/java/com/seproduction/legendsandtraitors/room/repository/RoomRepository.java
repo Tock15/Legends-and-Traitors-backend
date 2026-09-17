@@ -18,6 +18,18 @@ public interface RoomRepository {
      */
     void save(RoomState room);
 
+    /**
+     * Claims a room code for a brand-new room: one atomic write that stores the document and sets
+     * its TTL only while the code is free.
+     *
+     * <p>The only safe way to create a room — {@link #save} would overwrite a room another host
+     * already owns under the same code.
+     *
+     * @return {@code false} when the code was already taken, leaving the stored room untouched
+     * @throws IllegalArgumentException if {@code room} is null or carries no room code
+     */
+    boolean saveIfAbsent(RoomState room);
+
     /** Reads a room without extending its TTL; empty when unknown or expired. */
     Optional<RoomState> findByCode(String roomCode);
 

@@ -2,6 +2,12 @@
 
 Guidance for Claude Code when working in `legends-and-traitors-backend`.
 
+> **Do not commit or push automatically.** Staging, commits, rebases, pushes and pull requests are
+> the developer's to run — including when a ticket's Definition of Done lists them, and when an
+> approved plan describes them. Finish the work, leave it in the working tree, report what changed,
+> and stop there. Suggesting the exact commands is helpful; running them is not. The only exception
+> is an explicit, in-the-moment instruction to commit or push *this* change.
+
 > **How to read this file:** facts marked **(repo-verified)** were read from code and must be
 > re-checked when the code changes. Facts marked **(spec)** come from design docs and describe
 > intended behaviour that may not be built yet.
@@ -187,10 +193,10 @@ of feature packages before adding one.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/auth/guest` | Ephemeral guest session |
+| `POST /api/auth/guest` | Ephemeral guest session (repo-verified: `auth/AuthController.java`) |
 | `POST /api/auth/register` | Register account |
 | `POST /api/auth/login` | Login |
-| `POST /api/rooms` | Create a lobby room (`Authorization: Bearer <token>`) |
+| `POST /api/rooms` | Create a lobby room, `Authorization: Bearer <token>` (repo-verified: `room/controller/RoomController.java`) |
 | `POST /api/billing/webhook` | Payment provider webhook |
 
 ```jsonc
@@ -200,8 +206,32 @@ of feature packages before adding one.
 
 // POST /api/rooms  { "maxPlayers": 8 } → 201
 { "roomCode": "WXYZ89", "joinUrl": "http://localhost:5173/lobby/WXYZ89",
-  "hostId": "guest_948201" }
+  "hostId": "guest_948201", "createdAt": "2026-09-08T14:30:00Z" }
 ```
+
+**`POST /api/rooms` contract** (repo-verified)
+
+- `maxPlayers` is optional — omitting it, sending `{}`, or sending no body at all takes the
+  default from `game.room.max-players` (**8**).
+- A supplied `maxPlayers` is accepted only in **4–10 inclusive**
+  (`game.room.min-capacity` / `game.room.max-capacity`); anything else is **400** with a
+  `problem+json` body whose `detail` states the range.
+- **401** when the `Authorization` header is missing, is not a Bearer token, or carries an invalid
+  or expired one. The JWT filter passes an unauthenticated request through, so the controller
+  rejects a null principal itself.
+- `hostId` always comes from the token subject; a `hostId` in the body is ignored.
+- The room is stored in Redis under `room:<CODE>` with the `game.room.ttl-seconds` idle TTL, the
+  host seated as a ready host slot, and role settings seeded to `king 1, loyalist 1, rebel 1, spy 1`.
+- `joinUrl` is built from **`game.room.join-base-url`** (dev: the Vite server on 5173; prod:
+  `${FRONTEND_BASE_URL}`), never from the request `Host` header — that would return the backend
+  port and is attacker-controlled behind the proxy.
+
+> **Two different ranges, do not conflate them.** Room **capacity** is 4–10 in every profile — the
+> capacity bounds are deliberately not overridden per profile. **`canStart`** is a separate rule
+> that reads `min-players`, which *is* overridden to 2 in dev/test (see §5.2).
+>
+> **Known gap:** premium is meant to be what raises a room to 10 (wiki §4.3, the $1 upgrade), but
+> nothing reads `isPremium` yet — any authenticated caller can request the ceiling.
 
 ### 5.2 WebSocket — STOMP over Spring WebSocket
 
@@ -290,6 +320,9 @@ Routing: `/` → static frontend build, `/api/*` → backend, `/ws/*` → STOMP 
 CI lives in `.github/workflows/backend-ci.yml`; the epic roadmap is
 `ai-docs/Three_Chicken_Master_Engineering_Wiki_Context.md` §6 plus Taiga. Branch naming follows the
 existing git history: `<type>/LT-<id>/<short-description>`.
+
+Commit, rebase and PR conventions live in `.agents/rules/git-workflow.md`. Claude writes those
+messages when asked but never runs the commands — see the rule at the top of this file.
 
 ---
 
