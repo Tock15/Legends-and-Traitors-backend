@@ -28,18 +28,29 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         // wrap() would copy the headers and drop setUser — the attached accessor is the mutable one.
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
-        if (accessor == null || StompCommand.CONNECT != accessor.getCommand()) {
+        if (accessor == null) {
             return message;
         }
 
-        // Unlike the REST filter, a missing header is fatal: /user/** cannot route without a Principal.
-        JwtPrincipal principal = jwtTokenProvider.parse(bearerToken(accessor));
-        accessor.setUser(principal);
-        if (accessor.getSessionAttributes() != null) {
-            accessor.getSessionAttributes().put("userId", principal.id());
-            accessor.getSessionAttributes().put("displayName", principal.displayName());
-            accessor.getSessionAttributes().put("user", principal);
+        StompCommand command = accessor.getCommand();
+        if (StompCommand.CONNECT == command || StompCommand.STOMP == command) {
+            // Unlike the REST filter, a missing header is fatal: /user/** cannot route without a Principal.
+            JwtPrincipal principal = jwtTokenProvider.parse(bearerToken(accessor));
+            accessor.setUser(principal);
+            if (accessor.getSessionAttributes() != null) {
+                accessor.getSessionAttributes().put("userId", principal.id());
+                accessor.getSessionAttributes().put("displayName", principal.displayName());
+                accessor.getSessionAttributes().put("user", principal);
+            }
+            return message;
         }
+
+        if (StompCommand.SUBSCRIBE == command || StompCommand.SEND == command) {
+            if (accessor.getUser() == null) {
+                throw new InvalidJwtException("User is not authenticated");
+            }
+        }
+
         return message;
     }
 

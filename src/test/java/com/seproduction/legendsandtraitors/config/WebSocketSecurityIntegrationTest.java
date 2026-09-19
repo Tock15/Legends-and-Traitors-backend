@@ -142,4 +142,34 @@ class WebSocketSecurityIntegrationTest {
         assertThatThrownBy(() -> sessionFuture.get(5, TimeUnit.SECONDS))
                 .isInstanceOf(ExecutionException.class);
     }
+
+    @Test
+    @DisplayName("Raw WebSocket test: CONNECT without token receives ERROR frame and is closed")
+    void testRawConnectWithoutToken() throws Exception {
+        StandardWebSocketClient rawClient = new StandardWebSocketClient();
+        CompletableFuture<String> responseFuture = new CompletableFuture<>();
+        CompletableFuture<org.springframework.web.socket.CloseStatus> closeFuture = new CompletableFuture<>();
+
+        org.springframework.web.socket.WebSocketSession rawSession = rawClient.execute(new org.springframework.web.socket.handler.TextWebSocketHandler() {
+            @Override
+            protected void handleTextMessage(org.springframework.web.socket.WebSocketSession session, org.springframework.web.socket.TextMessage message) {
+                responseFuture.complete(message.getPayload());
+            }
+
+            @Override
+            public void afterConnectionClosed(org.springframework.web.socket.WebSocketSession session, org.springframework.web.socket.CloseStatus status) {
+                closeFuture.complete(status);
+            }
+        }, "ws://localhost:" + port + "/ws/lobby").get(5, TimeUnit.SECONDS);
+
+        String connectFrame = "CONNECT\naccept-version:1.2,1.1,1.0\nheart-beat:10000,10000\n\n\0";
+        rawSession.sendMessage(new org.springframework.web.socket.TextMessage(connectFrame));
+
+        String response = responseFuture.get(5, TimeUnit.SECONDS);
+        org.springframework.web.socket.CloseStatus closeStatus = closeFuture.get(5, TimeUnit.SECONDS);
+
+        assertThat(response).contains("ERROR");
+        assertThat(response).contains("missing an Authorization header");
+        assertThat(rawSession.isOpen()).isFalse();
+    }
 }

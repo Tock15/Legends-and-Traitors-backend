@@ -18,6 +18,7 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final StompAuthChannelInterceptor stompAuthChannelInterceptor;
+    private final StompErrorHandler stompErrorHandler;
 
     @Bean
     public TaskScheduler webSocketHeartbeatTaskScheduler() {
@@ -32,6 +33,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         // Registers /ws (ADR-002 standard) and /ws/lobby (Sprint 1 contract)
         registry.addEndpoint("/ws", "/ws/lobby").setAllowedOriginPatterns("*");
+        registry.setErrorHandler(stompErrorHandler);
     }
 
     @Override
