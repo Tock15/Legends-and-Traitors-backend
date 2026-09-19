@@ -33,25 +33,39 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         }
 
         // Unlike the REST filter, a missing header is fatal: /user/** cannot route without a Principal.
-        accessor.setUser(jwtTokenProvider.parse(bearerToken(accessor)));
+        JwtPrincipal principal = jwtTokenProvider.parse(bearerToken(accessor));
+        accessor.setUser(principal);
+        if (accessor.getSessionAttributes() != null) {
+            accessor.getSessionAttributes().put("userId", principal.id());
+            accessor.getSessionAttributes().put("displayName", principal.displayName());
+            accessor.getSessionAttributes().put("user", principal);
+        }
         return message;
     }
 
     private static String bearerToken(StompHeaderAccessor accessor) {
         List<String> values = accessor.getNativeHeader(HEADER);
-        if (values == null || values.isEmpty()) {
-            throw new InvalidJwtException("CONNECT frame is missing an " + HEADER + " header");
+        if (values != null && !values.isEmpty()) {
+            String value = values.getFirst();
+            if (value == null || !value.startsWith(PREFIX)) {
+                throw new InvalidJwtException("CONNECT frame " + HEADER + " header is not a Bearer token");
+            }
+
+            String token = value.substring(PREFIX.length()).trim();
+            if (token.isEmpty()) {
+                throw new InvalidJwtException("CONNECT frame Bearer token is empty");
+            }
+            return token;
         }
 
-        String value = values.getFirst();
-        if (value == null || !value.startsWith(PREFIX)) {
-            throw new InvalidJwtException("CONNECT frame " + HEADER + " header is not a Bearer token");
+        String passcode = accessor.getPasscode();
+        if (passcode != null && !passcode.isBlank()) {
+            if (passcode.startsWith(PREFIX)) {
+                return passcode.substring(PREFIX.length()).trim();
+            }
+            return passcode.trim();
         }
 
-        String token = value.substring(PREFIX.length()).trim();
-        if (token.isEmpty()) {
-            throw new InvalidJwtException("CONNECT frame Bearer token is empty");
-        }
-        return token;
+        throw new InvalidJwtException("CONNECT frame is missing an " + HEADER + " header");
     }
 }
