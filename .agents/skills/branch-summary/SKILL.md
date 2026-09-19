@@ -38,9 +38,10 @@ Group the code modifications into distinct conceptual themes rather than mechani
 ### Step 3: Enforce Summary Constraints
 Every bullet point in the generated summary MUST adhere to:
 1. **Single Depth**: No sub-bullets, nested lists, or multi-level indentations.
-2. **Word Count Window**: Strictly **10 to 15 words** per bullet point (inclusive). Count words carefully.
-3. **Active Voice**: Start with an active past-tense verb (e.g., *Configured*, *Implemented*, *Registered*, *Blocked*, *Created*).
-4. **Logical Focus**: Explain *what* changed and *why* it matters for the system.
+2. **Word Count Window**: Strictly **10 to 15 words** per bullet point (inclusive). Count words internally.
+3. **Clean Output**: Do NOT include word counts or parenthetical annotations (e.g. `*(14 words)*`) in the final output.
+4. **Active Voice**: Start with an active past-tense verb (e.g., *Configured*, *Implemented*, *Registered*, *Blocked*, *Created*).
+5. **Logical Focus**: Explain *what* changed and *why* it matters for the system.
 
 ---
 
