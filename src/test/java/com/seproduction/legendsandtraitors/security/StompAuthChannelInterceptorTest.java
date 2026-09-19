@@ -76,6 +76,42 @@ class StompAuthChannelInterceptorTest {
     }
 
     @Test
+    @DisplayName("Should populate session attributes when present on CONNECT")
+    void shouldPopulateSessionAttributesOnConnect() {
+        String token = jwtTokenProvider.issueToken(USER_ID, DISPLAY_NAME, true, false);
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
+        accessor.setNativeHeader("Authorization", "Bearer " + token);
+        java.util.Map<String, Object> sessionAttrs = new java.util.HashMap<>();
+        accessor.setSessionAttributes(sessionAttrs);
+        accessor.setLeaveMutable(true);
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+        interceptor.preSend(message, CHANNEL);
+
+        assertThat(sessionAttrs)
+                .containsEntry("userId", USER_ID)
+                .containsEntry("displayName", DISPLAY_NAME);
+        assertThat(sessionAttrs.get("user"))
+                .isInstanceOf(JwtPrincipal.class);
+    }
+
+    @Test
+    @DisplayName("Should authenticate via passcode header fallback")
+    void shouldAuthenticateViaPasscode() {
+        String token = jwtTokenProvider.issueToken(USER_ID, DISPLAY_NAME, true, false);
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
+        accessor.setPasscode(token);
+        accessor.setLeaveMutable(true);
+        Message<byte[]> message = MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+
+        Message<?> result = interceptor.preSend(message, CHANNEL);
+
+        assertThat(accessorOf(result).getUser())
+                .isInstanceOf(JwtPrincipal.class)
+                .extracting(Principal::getName).isEqualTo(USER_ID);
+    }
+
+    @Test
     @DisplayName("Should reject a CONNECT frame that carries no Authorization header")
     void shouldRejectConnectWithoutHeader() {
         assertThatThrownBy(() -> connectWith(null))
@@ -99,10 +135,26 @@ class StompAuthChannelInterceptorTest {
     }
 
     @Test
-    @DisplayName("Should leave frames other than CONNECT untouched")
-    void shouldIgnoreNonConnectFrames() {
-        Message<?> result = interceptor.preSend(frame(StompCommand.SEND, null), CHANNEL);
+    @DisplayName("Should leave frames like DISCONNECT untouched")
+    void shouldIgnoreDisconnectFrames() {
+        Message<?> result = interceptor.preSend(frame(StompCommand.DISCONNECT, null), CHANNEL);
 
         assertThat(accessorOf(result).getUser()).isNull();
+    }
+
+    @Test
+    @DisplayName("Should reject SUBSCRIBE without authenticated user")
+    void shouldRejectSubscribeWithoutAuth() {
+        assertThatThrownBy(() -> interceptor.preSend(frame(StompCommand.SUBSCRIBE, null), CHANNEL))
+                .isInstanceOf(InvalidJwtException.class)
+                .hasMessageContaining("User is not authenticated");
+    }
+
+    @Test
+    @DisplayName("Should reject SEND without authenticated user")
+    void shouldRejectSendWithoutAuth() {
+        assertThatThrownBy(() -> interceptor.preSend(frame(StompCommand.SEND, null), CHANNEL))
+                .isInstanceOf(InvalidJwtException.class)
+                .hasMessageContaining("User is not authenticated");
     }
 }
