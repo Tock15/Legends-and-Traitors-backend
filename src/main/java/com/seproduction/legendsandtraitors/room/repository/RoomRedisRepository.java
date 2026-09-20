@@ -29,6 +29,14 @@ public class RoomRedisRepository implements RoomRepository {
     }
 
     @Override
+    public boolean saveIfAbsent(RoomState room) {
+        Assert.notNull(room, "room must not be null");
+        Assert.hasText(room.getRoomCode(), "roomCode must not be empty");
+        return Boolean.TRUE.equals(stringRedisTemplate.opsForValue()
+                .setIfAbsent(key(room.getRoomCode()), redisJsonCodec.encode(room), ttl()));
+    }
+
+    @Override
     public Optional<RoomState> findByCode(String roomCode) {
         return Optional.ofNullable(stringRedisTemplate.opsForValue().get(key(roomCode)))
                 .map(json -> redisJsonCodec.decode(json, RoomState.class));
