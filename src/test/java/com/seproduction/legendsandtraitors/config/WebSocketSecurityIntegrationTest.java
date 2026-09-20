@@ -21,7 +21,6 @@ import org.springframework.web.socket.messaging.WebSocketStompClient;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -67,7 +66,9 @@ class WebSocketSecurityIntegrationTest {
         StompHeaders connectHeaders = new StompHeaders();
         connectHeaders.add("Authorization", "Bearer " + token);
 
-        AtomicReference<StompHeaders> connectedHeadersRef = new AtomicReference<>();
+        // DefaultStompSession completes the session future before invoking afterConnected, so the
+        // headers must be awaited separately rather than read once the session is in hand.
+        CompletableFuture<StompHeaders> connectedHeadersFuture = new CompletableFuture<>();
         CompletableFuture<StompSession> sessionFuture = stompClient.connectAsync(
                 "ws://localhost:" + port + "/ws/lobby",
                 new WebSocketHttpHeaders(),
@@ -75,16 +76,15 @@ class WebSocketSecurityIntegrationTest {
                 new StompSessionHandlerAdapter() {
                     @Override
                     public void afterConnected(StompSession session, StompHeaders connectedHeaders) {
-                        connectedHeadersRef.set(connectedHeaders);
+                        connectedHeadersFuture.complete(connectedHeaders);
                     }
                 }
         );
 
         StompSession session = sessionFuture.get(5, TimeUnit.SECONDS);
+        StompHeaders connectedHeaders = connectedHeadersFuture.get(5, TimeUnit.SECONDS);
 
         assertThat(session.isConnected()).isTrue();
-        StompHeaders connectedHeaders = connectedHeadersRef.get();
-        assertThat(connectedHeaders).isNotNull();
         assertThat(connectedHeaders.getHeartbeat()).containsExactly(10_000L, 10_000L);
         assertThat(connectedHeaders.getFirst("user-name")).isEqualTo("guest_123456");
 
