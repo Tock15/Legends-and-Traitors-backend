@@ -30,6 +30,18 @@ public interface RoomRepository {
      */
     boolean saveIfAbsent(RoomState room);
 
+    /**
+     * Writes the whole room and resets its TTL in one atomic step, but only while the stored
+     * document still carries {@code expectedVersion} — the optimistic-concurrency write the lobby
+     * mutation handlers use instead of {@link #save}.
+     *
+     * <p>Never changes {@code room}'s own version: the caller bumps it before writing.
+     *
+     * @return {@code false} when the stored version moved or no room is stored, leaving Redis untouched
+     * @throws IllegalArgumentException if {@code room} is null or carries no room code
+     */
+    boolean saveIfVersion(RoomState room, long expectedVersion);
+
     /** Reads a room without extending its TTL; empty when unknown or expired. */
     Optional<RoomState> findByCode(String roomCode);
 
@@ -46,4 +58,10 @@ public interface RoomRepository {
 
     /** @return {@code true} when a room was deleted, {@code false} when none was stored */
     boolean deleteByCode(String roomCode);
+
+    /**
+     * @return whether {@code playerId} holds an unexpired kick ban for {@code roomCode}
+     *         (key {@code room:{roomCode}:banned:{playerId}}, written by the kick flow)
+     */
+    boolean isBanned(String roomCode, String playerId);
 }

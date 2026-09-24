@@ -41,13 +41,12 @@ public class RoomState {
     private Instant lastActiveAt;
 
     /**
-     * Optimistic-concurrency stamp, reserved for the conditional writes planned for the
-     * lobby mutation handlers.
+     * Optimistic-concurrency stamp for the lobby mutation handlers.
      *
-     * <p>It is carried through the stored document so the mechanism can be added without a schema
-     * change, but <strong>nothing increments or checks it yet</strong> — the repository's save is
-     * an unconditional overwrite. Do not treat a read-back version as a lock, and do not assume a
-     * save failed because the version moved.
+     * <p>{@code RoomRepository#saveIfVersion} writes only while the stored value still matches the
+     * one the caller read, and the lobby join path bumps it on every such write. The plain
+     * {@code save} still ignores it and overwrites unconditionally, so a mutation written through
+     * {@code save} neither checks nor advances it.
      */
     private long version;
 }
