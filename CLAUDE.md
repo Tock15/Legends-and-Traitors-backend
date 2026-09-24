@@ -264,6 +264,8 @@ STOMP — do **not** fall back to authenticating inside the first application me
 
 A rejected frame (bad CONNECT token; SEND/SUBSCRIBE without a user) gets an ERROR frame that the
 interceptor sends itself, and Spring then closes the session with `PROTOCOL_ERROR` (repo-verified).
+Any unexpected exception while authenticating is logged and rejected the same way, with the generic
+reason `Authentication failed`.
 **Never throw from an inbound interceptor:** with receive order preserved, Spring's ordered channel
 logs and swallows the exception, and the client just hangs.
 
@@ -297,10 +299,14 @@ CONNECT, and before sending the join — a join broadcast only reaches existing 
 **Lobby join rules** (repo-verified: `room/service/RoomService.java#joinRoom`)
 
 - The room code is upper-cased before lookup; the broadcast goes to the canonical upper-case topic.
-- Checks run in the ticket's order: room exists → status is `LOBBY` → roster below `maxPlayers` →
-  no ban key `room:{roomCode}:banned:{playerId}`. A seated player is therefore refused by a full room.
-- A player already in the roster is re-activated (`isAfk=false`, `lastActiveAt` bumped); their colour
-  is only filled if it was null. Anyone else is appended as a not-ready, non-host slot.
+- Checks: room exists → status is `LOBBY` → roster below `maxPlayers` (skipped for a player already
+  seated) → no ban key `room:{roomCode}:banned:{playerId}`. This departs from LT-28's literal order
+  after PR review: a refresh or reconnect must never lock a seated player or the host out of a full room.
+- A player already in the roster, whether AFK or still connected (refresh, second tab), re-joins
+  idempotently: `isAfk=false`, `lastActiveAt` bumped, colour only filled if it was null; host, ready,
+  joinedAt and displayName are untouched. Anyone else is appended as a not-ready, non-host slot.
+- **Known gap:** nothing marks a slot AFK on disconnect yet, and one player may hold several live
+  STOMP sessions at once.
 - The write is a version-checked compare-and-set (`RoomRepository#saveIfVersion`); a lost race is
   retried on a fresh read, re-running every check, up to 3 times.
 
@@ -311,6 +317,7 @@ CONNECT, and before sending the join — a join broadcast only reaches existing 
 | `ROOM_FULL` | This lobby is full (maximum {maxPlayers} players). |
 | `PLAYER_BANNED` | You have been temporarily removed from this lobby. Please try again later. |
 | `INVALID_COLOR` | Color must be a hex value like #3182CE. |
+| `INVALID_PAYLOAD` | Message payload is malformed. (unreadable JSON; a failed constraint on any field other than `color` sends that constraint's message instead) |
 | `INTERNAL_ERROR` | Something went wrong. Please try again. (unexpected failures, exhausted retries) |
 
 Any other domain exception reaches the client with its own `errorCode` and message.

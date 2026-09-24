@@ -24,11 +24,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
-/**
- * Opens lobby rooms and returns the code and invite URL a host shares, then seats the players who
- * join them.
- */
 @Service
 public class RoomService {
 
@@ -58,13 +55,8 @@ public class RoomService {
     }
 
     /**
-     * Creates a room in {@code LOBBY} with the caller already seated as a ready host, so the roster
-     * is non-empty before any WebSocket connection exists.
-     *
-     * @param request may be null, as may its {@code maxPlayers} — either means the configured default
-     * @return the room code, the shareable invite URL, and the host identity as stored
-     * @throws InvalidRequestException if a requested capacity falls outside the configured range
-     * @throws IllegalStateException if {@value #MAX_CLAIM_ATTEMPTS} generated codes were all claimed by someone else
+     * Creates a {@code LOBBY} room with the caller seated as a ready host; a null request or
+     * {@code maxPlayers} takes the configured default.
      */
     public CreateRoomResponse createRoom(String hostUserId, String hostDisplayName, CreateRoomRequest request) {
         Assert.hasText(hostUserId, "hostUserId must not be blank");
@@ -84,20 +76,9 @@ public class RoomService {
     }
 
     /**
-     * Seats a player in a lobby, or re-activates the slot they already hold, and returns the room
-     * as stored.
-     *
-     * <p>Checks run in the ticket's order — status, capacity, ban — so a player already seated in a
-     * full room is refused like anyone else. A write that loses a race to another join is retried on
-     * a fresh read, re-running every check, up to {@value #MAX_JOIN_ATTEMPTS} times.
-     *
-     * @param roomCode matched case-insensitively; the returned room carries the canonical code
-     * @param color may be null; on a rejoin it only fills a slot that has no colour yet
-     * @throws RoomNotFoundException if no room is stored under the code
-     * @throws GameAlreadyStartedException if the room is no longer in {@code LOBBY}
-     * @throws RoomFullException if the roster is already at the room's capacity
-     * @throws PlayerBannedException if the player's kick ban has not expired
-     * @throws IllegalStateException if every attempt lost its write to a concurrent change
+     * Seats a player, or idempotently re-activates the slot they already hold (AFK or still
+     * connected), which skips the capacity check. A lost write is retried on a fresh read up to
+     * {@value #MAX_JOIN_ATTEMPTS} times.
      */
     public RoomState joinRoom(String roomCode, String playerId, String displayName, String color) {
         Assert.hasText(roomCode, "roomCode must not be blank");
@@ -128,7 +109,7 @@ public class RoomService {
         if (room.getStatus() != RoomStatus.LOBBY) {
             throw GameAlreadyStartedException.forRoom(code);
         }
-        if (room.getPlayers().size() >= room.getMaxPlayers()) {
+        if (slotOf(room, playerId).isEmpty() && room.getPlayers().size() >= room.getMaxPlayers()) {
             throw RoomFullException.forRoom(code, room.getMaxPlayers());
         }
         if (roomRepository.isBanned(code, playerId)) {
@@ -136,26 +117,29 @@ public class RoomService {
         }
     }
 
-    private static void seat(RoomState room, String playerId, String displayName, String color, Instant now) {
-        room.getPlayers().stream()
+    private static Optional<PlayerSlot> slotOf(RoomState room, String playerId) {
+        return room.getPlayers().stream()
                 .filter(slot -> playerId.equals(slot.getId()))
-                .findFirst()
-                .ifPresentOrElse(slot -> {
-                    slot.setAfk(false);
-                    slot.setLastActiveAt(now);
-                    if (slot.getColor() == null) {
-                        slot.setColor(color);
-                    }
-                }, () -> room.getPlayers().add(PlayerSlot.builder()
-                        .id(playerId)
-                        .displayName(displayName)
-                        .host(false)
-                        .ready(false)
-                        .afk(false)
-                        .color(color)
-                        .joinedAt(now)
-                        .lastActiveAt(now)
-                        .build()));
+                .findFirst();
+    }
+
+    private static void seat(RoomState room, String playerId, String displayName, String color, Instant now) {
+        slotOf(room, playerId).ifPresentOrElse(slot -> {
+            slot.setAfk(false);
+            slot.setLastActiveAt(now);
+            if (slot.getColor() == null) {
+                slot.setColor(color);
+            }
+        }, () -> room.getPlayers().add(PlayerSlot.builder()
+                .id(playerId)
+                .displayName(displayName)
+                .host(false)
+                .ready(false)
+                .afk(false)
+                .color(color)
+                .joinedAt(now)
+                .lastActiveAt(now)
+                .build()));
     }
 
     private int resolveMaxPlayers(CreateRoomRequest request) {

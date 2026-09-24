@@ -4,9 +4,6 @@ import com.seproduction.legendsandtraitors.room.model.RoomState;
 
 import java.util.List;
 
-/**
- * Full lobby snapshot pushed to {@code /topic/lobby/{roomCode}} after every roster change.
- */
 public record LobbyStateBroadcast(
         String event,
         String roomCode,

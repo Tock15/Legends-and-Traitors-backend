@@ -24,11 +24,16 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.converter.MessageConversionException;
 import org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.MapBindingResult;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -132,16 +137,53 @@ class LobbyWsControllerTest {
                 .isEqualTo(new LobbyErrorMessage("INVALID_REQUEST", "maxPlayers must be between 4 and 10"));
     }
 
-    @Test
-    @DisplayName("Should map a payload that fails validation to INVALID_COLOR")
-    void shouldMapInvalidPayload() throws NoSuchMethodException {
+    private static MethodArgumentNotValidException invalidPayload(BindingResult bindingResult)
+            throws NoSuchMethodException {
         MethodParameter payloadParameter = new MethodParameter(LobbyWsController.class.getDeclaredMethod(
                 "join", String.class, JwtPrincipal.class, JoinRoomMessage.class), 2);
-        MethodArgumentNotValidException invalid = new MethodArgumentNotValidException(
-                MessageBuilder.withPayload(new byte[0]).build(), payloadParameter);
+        Message<byte[]> message = MessageBuilder.withPayload(new byte[0]).build();
+        return bindingResult == null
+                ? new MethodArgumentNotValidException(message, payloadParameter)
+                : new MethodArgumentNotValidException(message, payloadParameter, bindingResult);
+    }
+
+    private static BindingResult rejected(String field, String defaultMessage) {
+        BindingResult bindingResult = new MapBindingResult(new HashMap<>(), "joinRoomMessage");
+        bindingResult.rejectValue(field, "Invalid", defaultMessage);
+        return bindingResult;
+    }
+
+    @Test
+    @DisplayName("Should map a colour that fails validation to INVALID_COLOR with the constraint's message")
+    void shouldMapInvalidColor() throws NoSuchMethodException {
+        MethodArgumentNotValidException invalid =
+                invalidPayload(rejected("color", "Color must be a hex value like #3182CE."));
 
         assertThat(controller.handleInvalidPayload(invalid))
                 .isEqualTo(new LobbyErrorMessage("INVALID_COLOR", "Color must be a hex value like #3182CE."));
+    }
+
+    @Test
+    @DisplayName("Should map any other invalid field to INVALID_PAYLOAD with the constraint's message")
+    void shouldMapOtherInvalidFieldToInvalidPayload() throws NoSuchMethodException {
+        MethodArgumentNotValidException invalid = invalidPayload(rejected("nickname", "size must be at most 16"));
+
+        assertThat(controller.handleInvalidPayload(invalid))
+                .isEqualTo(new LobbyErrorMessage("INVALID_PAYLOAD", "size must be at most 16"));
+    }
+
+    @Test
+    @DisplayName("Should map a validation failure without field errors to INVALID_PAYLOAD")
+    void shouldMapValidationFailureWithoutFieldErrors() throws NoSuchMethodException {
+        assertThat(controller.handleInvalidPayload(invalidPayload(null)))
+                .isEqualTo(new LobbyErrorMessage("INVALID_PAYLOAD", "Message payload is malformed."));
+    }
+
+    @Test
+    @DisplayName("Should map an unreadable payload to INVALID_PAYLOAD instead of INTERNAL_ERROR")
+    void shouldMapUnreadablePayload() {
+        assertThat(controller.handleUnreadablePayload(new MessageConversionException("Could not read JSON")))
+                .isEqualTo(new LobbyErrorMessage("INVALID_PAYLOAD", "Message payload is malformed."));
     }
 
     @Test

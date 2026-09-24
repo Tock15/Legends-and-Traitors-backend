@@ -25,6 +25,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataRedisTest
 @ActiveProfiles("test")
@@ -289,5 +290,14 @@ class RoomRedisRepositoryTest {
         assertThat(roomRepository.isBanned(ROOM_CODE, BANNED_PLAYER)).isTrue();
         assertThat(roomRepository.isBanned(ROOM_CODE, "guest_222222")).isFalse();
         assertThat(roomRepository.isBanned("ABCD23", BANNED_PLAYER)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should reject a null or blank room code on a ban check with IllegalArgumentException")
+    void shouldRejectBlankRoomCodeOnBanCheck() {
+        assertThatThrownBy(() -> roomRepository.isBanned(null, BANNED_PLAYER))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> roomRepository.isBanned(" ", BANNED_PLAYER))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

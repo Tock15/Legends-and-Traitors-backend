@@ -1,5 +1,6 @@
 package com.seproduction.legendsandtraitors.security;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.Message;
@@ -14,13 +15,10 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Authenticates the STOMP CONNECT frame and binds the {@code Principal} that {@code /user/**}
- * destinations route on.
- *
- * <p>Rejects a frame by sending the ERROR frame itself and dropping the original, never by throwing:
- * with {@code setPreserveReceiveOrder} on, Spring's ordered channel logs and swallows an interceptor
- * exception, so a throw would leave the client waiting instead of receiving ERROR and a close.
+ * Binds the CONNECT frame's JWT as the STOMP {@code Principal}. Never throws: with receive order
+ * preserved Spring swallows interceptor exceptions, so rejections send their own ERROR frame.
  */
+@Slf4j
 @Component
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
@@ -50,6 +48,10 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             return message;
         } catch (InvalidJwtException ex) {
             reject(accessor, ex.getMessage());
+            return null;
+        } catch (Exception ex) {
+            log.error("Unexpected error during STOMP authentication", ex);
+            reject(accessor, "Authentication failed");
             return null;
         }
     }

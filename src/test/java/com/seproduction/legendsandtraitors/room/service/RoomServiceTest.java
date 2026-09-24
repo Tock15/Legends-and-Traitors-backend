@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -376,14 +377,34 @@ class RoomServiceTest {
             verify(roomRepository, never()).saveIfVersion(any(), anyLong());
         }
 
-        @Test
-        @DisplayName("Should refuse even an already-seated player once the room is full, per the ticket's check order")
-        void shouldRejectSeatedPlayerWhenRoomIsFull() {
-            givenStored(room(RoomStatus.LOBBY, 4,
-                    slot(HOST_ID, true), slot("guest_1", false), slot("guest_2", false), slot("guest_3", false)));
+        @ParameterizedTest(name = "{0}, afk={1}")
+        @CsvSource({"guest_948201,true", "guest_948201,false", "guest_1,true", "guest_1,false"})
+        @DisplayName("Should let an already-seated player re-join a full room, AFK or still connected")
+        void shouldReactivateSeatedPlayerInFullRoom(String playerId, boolean afk) {
+            RoomState full = room(RoomStatus.LOBBY, 4,
+                    slot(HOST_ID, true), slot("guest_1", false), slot("guest_2", false), slot("guest_3", false));
+            PlayerSlot seated = slotOf(full, playerId);
+            seated.setAfk(afk);
+            boolean wasHost = seated.isHost();
+            boolean wasReady = seated.isReady();
+            givenStored(full);
+            givenWriteSucceeds();
 
-            assertThatThrownBy(() -> roomService.joinRoom(ROOM_CODE, HOST_ID, HOST_NAME, HOST_COLOR))
-                    .isInstanceOf(RoomFullException.class);
+            RoomState joined = roomService.joinRoom(ROOM_CODE, playerId, "Renamed", GUEST_COLOR);
+
+            assertThat(joined.getPlayers()).extracting(PlayerSlot::getId)
+                    .containsExactly(HOST_ID, "guest_1", "guest_2", "guest_3");
+            assertThat(slotOf(joined, playerId)).satisfies(slot -> {
+                assertThat(slot.isAfk()).isFalse();
+                assertThat(slot.getColor()).isEqualTo(GUEST_COLOR);
+                assertThat(slot.getLastActiveAt()).isEqualTo(NOW);
+                assertThat(slot.isHost()).isEqualTo(wasHost);
+                assertThat(slot.isReady()).isEqualTo(wasReady);
+                assertThat(slot.getJoinedAt()).isEqualTo(EARLIER);
+                assertThat(slot.getDisplayName()).isEqualTo("Name-" + playerId);
+            });
+            verify(roomRepository).isBanned(ROOM_CODE, playerId);
+            assertThat(writtenRoom()).isSameAs(joined);
         }
 
         @Test

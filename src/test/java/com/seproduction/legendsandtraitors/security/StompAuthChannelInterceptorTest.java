@@ -19,6 +19,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
 class StompAuthChannelInterceptorTest {
 
@@ -145,6 +148,16 @@ class StompAuthChannelInterceptorTest {
     @DisplayName("Should reject a CONNECT frame carrying a token we did not sign")
     void shouldRejectForgedToken() {
         assertRejected(connectWith("Bearer not-a-jwt"), "Malformed JWT");
+    }
+
+    @Test
+    @DisplayName("Should reject with a generic ERROR frame, not hang, when authentication fails unexpectedly")
+    void shouldRejectOnUnexpectedFailure() {
+        JwtTokenProvider failing = mock(JwtTokenProvider.class);
+        given(failing.parse(anyString())).willThrow(new IllegalStateException("boom"));
+        interceptor = new StompAuthChannelInterceptor(failing, (message, timeout) -> sentToClient.add(message));
+
+        assertRejected(connectWith("Bearer any-token"), "Authentication failed");
     }
 
     @Test

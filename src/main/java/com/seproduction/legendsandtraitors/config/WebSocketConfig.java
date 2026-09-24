@@ -34,8 +34,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // Registers /ws (ADR-002 standard) and /ws/lobby (Sprint 1 contract)
         registry.addEndpoint("/ws", "/ws/lobby").setAllowedOriginPatterns("*");
         registry.setErrorHandler(stompErrorHandler);
-        // Boot runs the channels on the virtual-thread executor, which would otherwise let a session's
-        // SEND overtake its SUBSCRIBE. Side effect: inbound interceptors must not throw (see StompAuthChannelInterceptor).
+        // Virtual-thread channels would let a SEND overtake its SUBSCRIBE; inbound interceptors must not throw.
         registry.setPreserveReceiveOrder(true);
     }
 

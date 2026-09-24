@@ -14,6 +14,7 @@ import com.seproduction.legendsandtraitors.security.JwtPrincipal;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.messaging.converter.MessageConversionException;
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.MessageMapping;
@@ -22,6 +23,8 @@ import org.springframework.messaging.handler.annotation.support.MethodArgumentNo
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.messaging.simp.annotation.SendToUser;
 import org.springframework.stereotype.Controller;
+import org.springframework.validation.BindingResult;
+import org.springframework.validation.FieldError;
 
 @Slf4j
 @Controller
@@ -29,13 +32,13 @@ import org.springframework.stereotype.Controller;
 class LobbyWsController {
 
     private static final String ERRORS_QUEUE = "/queue/errors";
+    private static final String INVALID_PAYLOAD = "INVALID_PAYLOAD";
+    private static final String MALFORMED_PAYLOAD_MESSAGE = "Message payload is malformed.";
 
     private final RoomService roomService;
     private final SimpMessagingTemplate simpMessagingTemplate;
 
-    /**
-     * Identity comes from the CONNECT-frame principal, never the body; an empty body means no colour.
-     */
+    /** Identity comes from the CONNECT-frame principal, never the body; an empty body means no colour. */
     @MessageMapping("/lobby/{roomCode}/join")
     void join(@DestinationVariable String roomCode,
               JwtPrincipal principal,
@@ -66,7 +69,20 @@ class LobbyWsController {
     @SendToUser(destinations = ERRORS_QUEUE, broadcast = false)
     LobbyErrorMessage handleInvalidPayload(MethodArgumentNotValidException ex) {
         log.debug("Rejected lobby payload: {}", ex.getMessage());
-        return new LobbyErrorMessage("INVALID_COLOR", "Color must be a hex value like #3182CE.");
+        BindingResult bindingResult = ex.getBindingResult();
+        FieldError error = bindingResult == null ? null : bindingResult.getFieldError();
+        if (error == null) {
+            return new LobbyErrorMessage(INVALID_PAYLOAD, MALFORMED_PAYLOAD_MESSAGE);
+        }
+        String code = "color".equals(error.getField()) ? "INVALID_COLOR" : INVALID_PAYLOAD;
+        return new LobbyErrorMessage(code, error.getDefaultMessage());
+    }
+
+    @MessageExceptionHandler
+    @SendToUser(destinations = ERRORS_QUEUE, broadcast = false)
+    LobbyErrorMessage handleUnreadablePayload(MessageConversionException ex) {
+        log.debug("Unreadable lobby payload: {}", ex.getMessage());
+        return new LobbyErrorMessage(INVALID_PAYLOAD, MALFORMED_PAYLOAD_MESSAGE);
     }
 
     @MessageExceptionHandler

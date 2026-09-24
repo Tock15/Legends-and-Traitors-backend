@@ -15,18 +15,22 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.messaging.converter.CompositeMessageConverter;
 import org.springframework.messaging.converter.JacksonJsonMessageConverter;
+import org.springframework.messaging.converter.SimpleMessageConverter;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.util.MimeTypeUtils;
 import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -226,6 +230,54 @@ class LobbyWsControllerIntegrationTest {
                 .containsEntry("message", "This lobby is full (maximum 4 players).");
         assertThat(latecomer.states()).isEmpty();
         assertThat(storedRosterIds(roomCode)).hasSize(4);
+    }
+
+    @Test
+    @DisplayName("Should let a connected host re-join a full room from a second live session without adding a slot")
+    void shouldLetConnectedHostRejoinFullRoom() throws Exception {
+        String roomCode = createRoom(4);
+        List<String> guests = List.of("guest_100001", "guest_100002", "guest_100003");
+        for (String seated : guests) {
+            roomService.joinRoom(roomCode, seated, displayName(seated), null);
+        }
+        LobbyClient firstTab = connect(HOST_ID, roomCode);
+        firstTab.join(roomCode, "#E53E3E");
+        assertThat(players(firstTab.nextState())).hasSize(4);
+
+        LobbyClient secondTab = connect(HOST_ID, roomCode);
+        secondTab.join(roomCode, null);
+
+        for (Map<String, Object> state : List.of(firstTab.nextState(), secondTab.nextState())) {
+            assertThat(players(state)).extracting(p -> p.get("id"))
+                    .containsExactly(HOST_ID, guests.get(0), guests.get(1), guests.get(2));
+            assertThat(players(state).getFirst())
+                    .containsEntry("color", "#E53E3E")
+                    .containsEntry("isAfk", false)
+                    .containsEntry("isHost", true);
+        }
+        assertThat(firstTab.errors()).isEmpty();
+        assertThat(secondTab.errors()).isEmpty();
+        assertThat(storedRosterIds(roomCode)).doesNotHaveDuplicates().hasSize(4);
+    }
+
+    @Test
+    @DisplayName("Should send INVALID_PAYLOAD for a join body that is not valid JSON and leave the roster unchanged")
+    void shouldRejectMalformedJson() throws Exception {
+        String roomCode = createRoom(null);
+        stompClient.setMessageConverter(new CompositeMessageConverter(
+                List.of(new SimpleMessageConverter(), new JacksonJsonMessageConverter())));
+        LobbyClient client = connect("guest_114205", roomCode);
+        StompHeaders headers = new StompHeaders();
+        headers.setDestination("/app/lobby/" + roomCode + "/join");
+        headers.setContentType(MimeTypeUtils.APPLICATION_JSON);
+
+        client.session().send(headers, "{not json".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(client.nextError())
+                .containsEntry("code", "INVALID_PAYLOAD")
+                .containsEntry("message", "Message payload is malformed.");
+        assertThat(client.states()).isEmpty();
+        assertThat(storedRosterIds(roomCode)).containsExactly(HOST_ID);
     }
 
     @Test
