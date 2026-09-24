@@ -21,14 +21,7 @@ public class RoomState {
 
     private String hostId;
 
-    /**
-     * Capacity of this particular room, stamped at creation from {@code game.room.max-players}
-     * (premium rooms raise it to 10).
-     *
-     * <p>Has no model-level default on purpose: a hardcoded 8 here would silently cap a premium
-     * room back to 8 if a caller ever forgot to set it, and the lobby rules are required to read
-     * from the injected {@code GameRoomProperties} rather than a baked-in range.
-     */
+    // No default on purpose: a baked-in 8 would silently cap a premium room.
     private int maxPlayers;
 
     @Builder.Default
@@ -40,14 +33,6 @@ public class RoomState {
 
     private Instant lastActiveAt;
 
-    /**
-     * Optimistic-concurrency stamp, reserved for the conditional writes planned for the
-     * lobby mutation handlers.
-     *
-     * <p>It is carried through the stored document so the mechanism can be added without a schema
-     * change, but <strong>nothing increments or checks it yet</strong> — the repository's save is
-     * an unconditional overwrite. Do not treat a read-back version as a lock, and do not assume a
-     * save failed because the version moved.
-     */
+    // Checked by RoomRepository#saveIfVersion only; plain save neither checks nor advances it.
     private long version;
 }

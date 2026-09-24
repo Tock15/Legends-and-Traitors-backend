@@ -25,6 +25,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataRedisTest
 @ActiveProfiles("test")
@@ -33,6 +34,8 @@ class RoomRedisRepositoryTest {
 
     private static final String ROOM_CODE = "WXYZ89";
     private static final String KEY = "room:" + ROOM_CODE;
+    private static final String BANNED_PLAYER = "guest_114205";
+    private static final String BAN_KEY = KEY + ":banned:" + BANNED_PLAYER;
     private static final Instant CREATED_AT = Instant.parse("2026-09-08T14:30:00Z");
     private static final long CREATED_AT_MILLIS = 1788877800000L;
 
@@ -46,8 +49,8 @@ class RoomRedisRepositoryTest {
     private GameRoomProperties gameRoomProperties;
 
     @AfterEach
-    void clearRoomKey() {
-        stringRedisTemplate.delete(KEY);
+    void clearRoomKeys() {
+        stringRedisTemplate.delete(List.of(KEY, BAN_KEY));
     }
 
     private RoomState sampleRoom() {
@@ -234,5 +237,67 @@ class RoomRedisRepositoryTest {
 
         assertThat(claimed).isFalse();
         assertThat(storedJson()).isEqualTo(jsonBeforeClaim);
+    }
+
+    @Test
+    @DisplayName("Should write and reset the TTL when the stored version still matches")
+    void shouldSaveWhenVersionMatches() {
+        roomRepository.save(sampleRoom());
+        stringRedisTemplate.expire(KEY, Duration.ofSeconds(5));
+        RoomState updated = sampleRoom();
+        updated.setHostId("guest_111111");
+        updated.setVersion(4);
+
+        boolean written = roomRepository.saveIfVersion(updated, 3);
+
+        assertThat(written).isTrue();
+        assertThat(roomRepository.findByCode(ROOM_CODE)).hasValue(updated);
+        assertThat(storedTtlSeconds())
+                .isGreaterThan(gameRoomProperties.getTtlSeconds() - 60)
+                .isLessThanOrEqualTo(gameRoomProperties.getTtlSeconds());
+    }
+
+    @Test
+    @DisplayName("Should refuse a write whose expected version has moved, leaving the stored room untouched")
+    void shouldRefuseWhenVersionMoved() {
+        roomRepository.save(sampleRoom());
+        String jsonBeforeWrite = storedJson();
+        RoomState stale = sampleRoom();
+        stale.setHostId("guest_111111");
+        stale.setVersion(3);
+
+        boolean written = roomRepository.saveIfVersion(stale, 2);
+
+        assertThat(written).isFalse();
+        assertThat(storedJson()).isEqualTo(jsonBeforeWrite);
+    }
+
+    @Test
+    @DisplayName("Should refuse a versioned write to a room that is not stored, without creating it")
+    void shouldRefuseVersionedWriteToMissingRoom() {
+        assertThat(roomRepository.saveIfVersion(sampleRoom(), 3)).isFalse();
+
+        assertThat(roomRepository.existsByCode(ROOM_CODE)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should report a ban only while room:{roomCode}:banned:{playerId} exists")
+    void shouldReportBanFromBanKey() {
+        assertThat(roomRepository.isBanned(ROOM_CODE, BANNED_PLAYER)).isFalse();
+
+        stringRedisTemplate.opsForValue().set(BAN_KEY, "1", Duration.ofMinutes(5));
+
+        assertThat(roomRepository.isBanned(ROOM_CODE, BANNED_PLAYER)).isTrue();
+        assertThat(roomRepository.isBanned(ROOM_CODE, "guest_222222")).isFalse();
+        assertThat(roomRepository.isBanned("ABCD23", BANNED_PLAYER)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Should reject a null or blank room code on a ban check with IllegalArgumentException")
+    void shouldRejectBlankRoomCodeOnBanCheck() {
+        assertThatThrownBy(() -> roomRepository.isBanned(null, BANNED_PLAYER))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> roomRepository.isBanned(" ", BANNED_PLAYER))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

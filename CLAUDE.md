@@ -19,6 +19,11 @@ Guidance for Claude Code when working in `legends-and-traitors-backend`.
 > Companion AI steering for Google Antigravity lives in `AGENT.md` and `.agents/rules/`, adhering
 > to this file as the unified Single Source of Truth (SSoT).
 
+> **Tickets win on conflict.** When an `LT-` ticket's scope contradicts this file — package names,
+> payload shapes, destinations, error codes — follow the ticket and update this file to match in the
+> same change. **Git is the exception:** a ticket never overrides the no-commit/no-push rule above,
+> nor the branch, commit and PR conventions in `.agents/rules/git-workflow.md`.
+
 ---
 
 ## 1. Project Overview
@@ -64,7 +69,7 @@ Full rules — roles, victory matrix, draft, card types, turn cycle:
 | Framework | Spring Boot | **4.1.1** (repo-verified: parent POM) | Design docs say "3.x/4.x"; the POM pins 4.1.1 |
 | Primary DB | PostgreSQL | 16-alpine (repo-verified) | Accounts, credentials, $1 upgrade transactions |
 | Cache / real-time | Redis | 7-alpine (repo-verified) | Room state, presence, session TTLs |
-| Real-time gateway | **STOMP** over Spring WebSocket | broker configured (repo-verified: `config/WebSocketConfig.java`) | Endpoint + CONNECT auth live; no `@MessageMapping` handlers yet — see §5.2 |
+| Real-time gateway | **STOMP** over Spring WebSocket | broker configured (repo-verified: `config/WebSocketConfig.java`) | Endpoint + CONNECT auth live; lobby join handler in `room/controller/LobbyWsController.java` — see §5.2 |
 | Persistence | Spring Data JPA | via starter (repo-verified) | `open-in-view: false` on every profile |
 | Build | Apache Maven | wrapper `./mvnw` (repo-verified) | Maven 3.9+ |
 | Codegen | Lombok | optional dep + annotation processor paths (repo-verified) | `@Getter`/`@Setter` used in config classes |
@@ -131,7 +136,7 @@ folder boilerplate in young features.
 3. **Model complexity** — entities plus multiple request/response DTOs need their own `model/`
    sub-package.
 
-### 4.3 Standard Sub-Package Names (use these exact names, always)
+### 4.3 Standard Sub-Package Names (use these exact names unless a ticket names others)
 
 | Sub-package | Holds |
 | --- | --- |
@@ -140,6 +145,9 @@ folder boilerplate in young features.
 | `service/` | Business rules |
 | `repository/` | Persistence (JPA or Redis) |
 | `model/` | Entities and DTOs |
+
+LT-28 specified its own layout, so `room/` keeps its STOMP controller in `controller/` next to the
+REST one and its WS payload records in `dto/` (repo-verified) — see the precedence rule at the top.
 
 ### 4.4 Inter-Feature Boundary Rules (strict)
 
@@ -247,17 +255,25 @@ raw `/ws/lobby/{roomCode}` handler described in the Sprint 1 baseline. Candidate
 | Broker prefix | `/topic` — server → room broadcast |
 | User prefix | `/user` — server → single player |
 | Broker | Simple in-memory broker. Scaling past one node requires a relay (RabbitMQ/ActiveMQ). |
+| Ordering | Per-session receive and publish order preserved (`setPreserveReceiveOrder` / `setPreservePublishOrder`, repo-verified). Boot runs the channels on the virtual-thread executor, which would otherwise let a SEND overtake its SUBSCRIBE. |
 
 **Authentication.** The JWT travels in the **CONNECT frame** (`Authorization: Bearer <token>`),
 validated by a `ChannelInterceptor` on the inbound channel, which binds the `Principal`. This is what
 makes `/user/**` destinations and message-level security work, and is the main reason to adopt
 STOMP — do **not** fall back to authenticating inside the first application message.
 
+A rejected frame (bad CONNECT token; SEND/SUBSCRIBE without a user) gets an ERROR frame that the
+interceptor sends itself, and Spring then closes the session with `PROTOCOL_ERROR` (repo-verified).
+Any unexpected exception while authenticating is logged and rejected the same way, with the generic
+reason `Authentication failed`.
+**Never throw from an inbound interceptor:** with receive order preserved, Spring's ordered channel
+logs and swallows the exception, and the client just hangs.
+
 **Client → Server (`/app`)**
 
 | Destination | Payload | Notes |
 | --- | --- | --- |
-| `/app/lobby/{roomCode}/join` | `{ displayName, color }` | Token comes from CONNECT, not the body |
+| `/app/lobby/{roomCode}/join` | `{ color }` | Optional `#RRGGBB`; id and displayName come from the CONNECT token (repo-verified) |
 | `/app/lobby/{roomCode}/ready` | `{ isReady }` | |
 | `/app/lobby/{roomCode}/chat` | `{ message }` | |
 | `/app/lobby/{roomCode}/roles` | `{ roles: { king, loyalist, rebel, spy } }` | Host only |
@@ -270,17 +286,46 @@ STOMP — do **not** fall back to authenticating inside the first application me
 
 | Destination | Event | Contents |
 | --- | --- | --- |
-| `/topic/lobby/{roomCode}` | `ROOM_STATE_UPDATED` | roomCode, hostId, minPlayers, maxPlayers, allReady, canStart, players[], roleConfig |
+| `/topic/lobby/{roomCode}` | `LOBBY_STATE` | event, roomCode, status, hostId, totalPlayers, maxPlayers, players[] (id, displayName, isHost, isReady, isAfk, color), settings (king, loyalist, rebel, spy) — repo-verified |
 | `/topic/lobby/{roomCode}` | `CHAT_MESSAGE` | senderId, senderName, senderColor, message, ISO timestamp |
 | `/topic/lobby/{roomCode}` | `GAME_STARTED` | roomCode, turnPlayerId |
 | `/topic/lobby/{roomCode}` | `GAME_LOG_ENTRY` | id, timestamp, actorName, actionType, cardName, targetName, description |
 | `/user/queue/alerts` | `ACTION_ALERT` | prompt, timeLimitSeconds, allowedResponses — delivered only to the target player |
+| `/user/queue/errors` | — | `{ code, message }` — delivered only to the session whose message failed (repo-verified) |
 
-Clients subscribe to `/topic/lobby/{roomCode}` plus `/user/queue/alerts` after CONNECT.
+Clients subscribe to `/topic/lobby/{roomCode}`, `/user/queue/alerts` and `/user/queue/errors` after
+CONNECT, and before sending the join — a join broadcast only reaches existing subscriptions.
 
-**Payload bodies are unchanged** from the Sprint 1 contract — only routing and auth move. The
-`event` discriminator is redundant under STOMP (the destination already routes) but is retained in
-broadcast bodies so existing frontend switch logic keeps working.
+**Lobby join rules** (repo-verified: `room/service/RoomService.java#joinRoom`)
+
+- The room code is upper-cased before lookup; the broadcast goes to the canonical upper-case topic.
+- Checks: room exists → status is `LOBBY` → roster below `maxPlayers` (skipped for a player already
+  seated) → no ban key `room:{roomCode}:banned:{playerId}`. This departs from LT-28's literal order
+  after PR review: a refresh or reconnect must never lock a seated player or the host out of a full room.
+- A player already in the roster, whether AFK or still connected (refresh, second tab), re-joins
+  idempotently: `isAfk=false`, `lastActiveAt` bumped, colour only filled if it was null; host, ready,
+  joinedAt and displayName are untouched. Anyone else is appended as a not-ready, non-host slot.
+- **Known gap:** nothing marks a slot AFK on disconnect yet, and one player may hold several live
+  STOMP sessions at once.
+- The write is a version-checked compare-and-set (`RoomRepository#saveIfVersion`); a lost race is
+  retried on a fresh read, re-running every check, up to 3 times.
+
+| `code` | `message` |
+| --- | --- |
+| `ROOM_NOT_FOUND` | This lobby does not exist or has expired. |
+| `ROOM_IN_GAME` | Game is already in progress. (any status other than `LOBBY`) |
+| `ROOM_FULL` | This lobby is full (maximum {maxPlayers} players). |
+| `PLAYER_BANNED` | You have been temporarily removed from this lobby. Please try again later. |
+| `INVALID_COLOR` | Color must be a hex value like #3182CE. |
+| `INVALID_PAYLOAD` | Message payload is malformed. (unreadable JSON; a failed constraint on any field other than `color` sends that constraint's message instead) |
+| `INTERNAL_ERROR` | Something went wrong. Please try again. (unexpected failures, exhausted retries) |
+
+Any other domain exception reaches the client with its own `errorCode` and message.
+
+**Payload bodies are unchanged** from the Sprint 1 contract — only routing and auth move — except
+the lobby snapshot, which LT-28 replaced: `ROOM_STATE_UPDATED` became `LOBBY_STATE`. The `event`
+discriminator is redundant under STOMP (the destination already routes) but is retained in broadcast
+bodies so existing frontend switch logic keeps working.
 
 **Deltas from the Sprint 1 baseline**
 
@@ -293,7 +338,7 @@ broadcast bodies so existing frontend switch logic keeps working.
 | Native browser `WebSocket` | `@stomp/stompjs` client |
 
 > This section is **not yet ratified with the frontend team** — confirm the destinations, the
-> CONNECT auth header, and the `/user/queue/alerts` routing with the `three-chicken-frontend` team
+> CONNECT auth header, and the `/user/queue/alerts` / `/user/queue/errors` routing with the `three-chicken-frontend` team
 > before coding against it.
 
 ---

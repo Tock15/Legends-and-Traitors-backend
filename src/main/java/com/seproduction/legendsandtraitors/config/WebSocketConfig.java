@@ -34,6 +34,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         // Registers /ws (ADR-002 standard) and /ws/lobby (Sprint 1 contract)
         registry.addEndpoint("/ws", "/ws/lobby").setAllowedOriginPatterns("*");
         registry.setErrorHandler(stompErrorHandler);
+        // Virtual-thread channels would let a SEND overtake its SUBSCRIBE; inbound interceptors must not throw.
+        registry.setPreserveReceiveOrder(true);
     }
 
     @Override
@@ -44,6 +46,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 .setHeartbeatValue(new long[]{10_000L, 10_000L})
                 .setTaskScheduler(webSocketHeartbeatTaskScheduler());
         registry.setUserDestinationPrefix("/user");
+        // Same executor on the way out: without this, lobby broadcast N+1 could reach a client before N.
+        registry.setPreservePublishOrder(true);
     }
 
     @Override

@@ -1,6 +1,10 @@
 package com.seproduction.legendsandtraitors.room.service;
 
+import com.seproduction.legendsandtraitors.common.exception.GameAlreadyStartedException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidRequestException;
+import com.seproduction.legendsandtraitors.common.exception.PlayerBannedException;
+import com.seproduction.legendsandtraitors.common.exception.RoomFullException;
+import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundException;
 import com.seproduction.legendsandtraitors.config.GameRoomProperties;
 import com.seproduction.legendsandtraitors.room.model.CreateRoomRequest;
 import com.seproduction.legendsandtraitors.room.model.CreateRoomResponse;
@@ -19,14 +23,14 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
 
-/**
- * Opens lobby rooms and returns the code and invite URL a host shares.
- */
 @Service
 public class RoomService {
 
     private static final int MAX_CLAIM_ATTEMPTS = 3;
+    private static final int MAX_JOIN_ATTEMPTS = 3;
 
     private final RoomCodeGenerator roomCodeGenerator;
     private final RoomRepository roomRepository;
@@ -51,13 +55,8 @@ public class RoomService {
     }
 
     /**
-     * Creates a room in {@code LOBBY} with the caller already seated as a ready host, so the roster
-     * is non-empty before any WebSocket connection exists.
-     *
-     * @param request may be null, as may its {@code maxPlayers} — either means the configured default
-     * @return the room code, the shareable invite URL, and the host identity as stored
-     * @throws InvalidRequestException if a requested capacity falls outside the configured range
-     * @throws IllegalStateException if {@value #MAX_CLAIM_ATTEMPTS} generated codes were all claimed by someone else
+     * Creates a {@code LOBBY} room with the caller seated as a ready host; a null request or
+     * {@code maxPlayers} takes the configured default.
      */
     public CreateRoomResponse createRoom(String hostUserId, String hostDisplayName, CreateRoomRequest request) {
         Assert.hasText(hostUserId, "hostUserId must not be blank");
@@ -74,6 +73,73 @@ public class RoomService {
             }
         }
         throw new IllegalStateException("Unable to claim a unique room code");
+    }
+
+    /**
+     * Seats a player, or idempotently re-activates the slot they already hold (AFK or still
+     * connected), which skips the capacity check. A lost write is retried on a fresh read up to
+     * {@value #MAX_JOIN_ATTEMPTS} times.
+     */
+    public RoomState joinRoom(String roomCode, String playerId, String displayName, String color) {
+        Assert.hasText(roomCode, "roomCode must not be blank");
+        Assert.hasText(playerId, "playerId must not be blank");
+        Assert.hasText(displayName, "displayName must not be blank");
+
+        String code = roomCode.toUpperCase(Locale.ROOT);
+        for (int attempt = 0; attempt < MAX_JOIN_ATTEMPTS; attempt++) {
+            RoomState room = roomRepository.findByCode(code)
+                    .orElseThrow(() -> RoomNotFoundException.forRoomCode(code));
+            validateJoin(code, room, playerId);
+
+            Instant now = clock.instant().truncatedTo(ChronoUnit.MILLIS);
+            seat(room, playerId, displayName, color, now);
+            room.setLastActiveAt(now);
+
+            long readVersion = room.getVersion();
+            room.setVersion(readVersion + 1);
+            if (roomRepository.saveIfVersion(room, readVersion)) {
+                return room;
+            }
+        }
+        throw new IllegalStateException(
+                "Unable to join room " + code + " after " + MAX_JOIN_ATTEMPTS + " conflicting writes");
+    }
+
+    private void validateJoin(String code, RoomState room, String playerId) {
+        if (room.getStatus() != RoomStatus.LOBBY) {
+            throw GameAlreadyStartedException.forRoom(code);
+        }
+        if (slotOf(room, playerId).isEmpty() && room.getPlayers().size() >= room.getMaxPlayers()) {
+            throw RoomFullException.forRoom(code, room.getMaxPlayers());
+        }
+        if (roomRepository.isBanned(code, playerId)) {
+            throw PlayerBannedException.forPlayer(playerId, code);
+        }
+    }
+
+    private static Optional<PlayerSlot> slotOf(RoomState room, String playerId) {
+        return room.getPlayers().stream()
+                .filter(slot -> playerId.equals(slot.getId()))
+                .findFirst();
+    }
+
+    private static void seat(RoomState room, String playerId, String displayName, String color, Instant now) {
+        slotOf(room, playerId).ifPresentOrElse(slot -> {
+            slot.setAfk(false);
+            slot.setLastActiveAt(now);
+            if (slot.getColor() == null) {
+                slot.setColor(color);
+            }
+        }, () -> room.getPlayers().add(PlayerSlot.builder()
+                .id(playerId)
+                .displayName(displayName)
+                .host(false)
+                .ready(false)
+                .afk(false)
+                .color(color)
+                .joinedAt(now)
+                .lastActiveAt(now)
+                .build()));
     }
 
     private int resolveMaxPlayers(CreateRoomRequest request) {
