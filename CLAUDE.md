@@ -274,7 +274,7 @@ logs and swallows the exception, and the client just hangs.
 | Destination | Payload | Notes |
 | --- | --- | --- |
 | `/app/lobby/{roomCode}/join` | `{ color }` | Optional `#RRGGBB`; id and displayName come from the CONNECT token (repo-verified) |
-| `/app/lobby/{roomCode}/ready` | `{ isReady }` | |
+| `/app/lobby/{roomCode}/ready` | `{ isReady }` | Authenticated caller toggles ready; host is invariant (repo-verified: `room/controller/LobbyWsController.java`) |
 | `/app/lobby/{roomCode}/chat` | `{ message }` | |
 | `/app/lobby/{roomCode}/roles` | `{ roles: { king, loyalist, rebel, spy } }` | Host only |
 | `/app/lobby/{roomCode}/start` | — | Host only; requires `canStart` |
@@ -287,6 +287,7 @@ logs and swallows the exception, and the client just hangs.
 | Destination | Event | Contents |
 | --- | --- | --- |
 | `/topic/lobby/{roomCode}` | `LOBBY_STATE` | event, roomCode, status, hostId, totalPlayers, maxPlayers, players[] (id, displayName, isHost, isReady, isAfk, color), settings (king, loyalist, rebel, spy) — repo-verified |
+| `/topic/lobby/{roomCode}` | `PLAYER_READY_CHANGED` | event, playerId, isReady, canStartGame (repo-verified: `room/controller/LobbyWsController.java`) |
 | `/topic/lobby/{roomCode}` | `CHAT_MESSAGE` | senderId, senderName, senderColor, message, ISO timestamp |
 | `/topic/lobby/{roomCode}` | `GAME_STARTED` | roomCode, turnPlayerId |
 | `/topic/lobby/{roomCode}` | `GAME_LOG_ENTRY` | id, timestamp, actorName, actionType, cardName, targetName, description |

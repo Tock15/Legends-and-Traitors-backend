@@ -1,11 +1,13 @@
 package com.seproduction.legendsandtraitors.room.service;
 
 import com.seproduction.legendsandtraitors.common.exception.GameAlreadyStartedException;
+import com.seproduction.legendsandtraitors.common.exception.InvalidLobbyActionException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidRequestException;
 import com.seproduction.legendsandtraitors.common.exception.PlayerBannedException;
 import com.seproduction.legendsandtraitors.common.exception.RoomFullException;
 import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundException;
 import com.seproduction.legendsandtraitors.config.GameRoomProperties;
+import com.seproduction.legendsandtraitors.room.dto.PlayerReadyBroadcast;
 import com.seproduction.legendsandtraitors.room.model.CreateRoomRequest;
 import com.seproduction.legendsandtraitors.room.model.CreateRoomResponse;
 import com.seproduction.legendsandtraitors.room.model.PlayerSlot;
@@ -103,6 +105,61 @@ public class RoomService {
         }
         throw new IllegalStateException(
                 "Unable to join room " + code + " after " + MAX_JOIN_ATTEMPTS + " conflicting writes");
+    }
+
+    /**
+     * Toggles the ready state of a seated player in a lobby room. Hosts are invariant (always ready).
+     * Evaluates whether room conditions allow starting the game and saves the updated state
+     * via optimistic CAS retry loop.
+     */
+    public PlayerReadyBroadcast toggleReady(String roomCode, String playerId, boolean isReady) {
+        Assert.hasText(roomCode, "roomCode must not be blank");
+        Assert.hasText(playerId, "playerId must not be blank");
+
+        String code = roomCode.toUpperCase(Locale.ROOT);
+        for (int attempt = 0; attempt < MAX_JOIN_ATTEMPTS; attempt++) {
+            RoomState room = roomRepository.findByCode(code)
+                    .orElseThrow(() -> RoomNotFoundException.forRoomCode(code));
+            if (room.getStatus() != RoomStatus.LOBBY) {
+                throw GameAlreadyStartedException.forRoom(code);
+            }
+
+            PlayerSlot slot = slotOf(room, playerId)
+                    .orElseThrow(() -> new InvalidLobbyActionException("Player is not in this room"));
+
+            Instant now = clock.instant().truncatedTo(ChronoUnit.MILLIS);
+            boolean newReady = slot.isHost() || isReady;
+            slot.setReady(newReady);
+            slot.setAfk(false);
+            slot.setLastActiveAt(now);
+            room.setLastActiveAt(now);
+
+            boolean canStart = canStartGame(room);
+
+            long readVersion = room.getVersion();
+            room.setVersion(readVersion + 1);
+            if (roomRepository.saveIfVersion(room, readVersion)) {
+                return new PlayerReadyBroadcast(playerId, newReady, canStart);
+            }
+        }
+        throw new IllegalStateException(
+                "Unable to update ready state for room " + code + " after " + MAX_JOIN_ATTEMPTS + " conflicting writes");
+    }
+
+    /**
+     * Evaluates whether the room satisfies game start conditions:
+     * - Status is LOBBY
+     * - Minimum player count threshold is met (configured via game.room.min-players)
+     * - All non-host players are marked ready (hosts are inherently ready)
+     */
+    public boolean canStartGame(RoomState room) {
+        if (room == null || room.getStatus() != RoomStatus.LOBBY
+                || room.getPlayers().size() < gameRoomProperties.getMinPlayers()) {
+            return false;
+        }
+        return room.getPlayers().stream()
+                .filter(slot -> !slot.isHost())
+                .allMatch(PlayerSlot::isReady);
     }
 
     private void validateJoin(String code, RoomState room, String playerId) {

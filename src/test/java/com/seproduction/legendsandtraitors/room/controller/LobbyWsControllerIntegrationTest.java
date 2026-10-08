@@ -157,6 +157,17 @@ class LobbyWsControllerIntegrationTest {
             session.send("/app/lobby/" + roomCode + "/join", color == null ? Map.of() : Map.of("color", color));
         }
 
+        void ready(String roomCode, Boolean isReady) {
+            session.send("/app/lobby/" + roomCode + "/ready",
+                    isReady == null ? Map.of() : Map.of("isReady", isReady));
+        }
+
+        Map<String, Object> nextBroadcast() throws InterruptedException {
+            Map<String, Object> broadcast = states.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            assertThat(broadcast).as("broadcast on /topic/lobby/{roomCode}").isNotNull();
+            return broadcast;
+        }
+
         Map<String, Object> nextState() throws InterruptedException {
             Map<String, Object> state = states.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             assertThat(state).as("LOBBY_STATE broadcast").isNotNull();
@@ -351,5 +362,123 @@ class LobbyWsControllerIntegrationTest {
         Map<String, Object> state = client.nextState();
         assertThat(state).containsEntry("roomCode", roomCode);
         assertThat(players(state)).extracting(p -> p.get("id")).containsExactly(HOST_ID, "guest_114205");
+    }
+
+    @Test
+    @DisplayName("Should broadcast PLAYER_READY_CHANGED and update canStartGame when guest toggles ready")
+    void shouldBroadcastPlayerReadyChanged() throws Exception {
+        String roomCode = createRoom(null);
+        LobbyClient host = connect(HOST_ID, roomCode);
+        host.join(roomCode, "#E53E3E");
+        host.nextState();
+
+        LobbyClient guest = connect("guest_114205", roomCode);
+        guest.join(roomCode, "#3182CE");
+        host.nextState();
+        guest.nextState();
+
+        guest.ready(roomCode, true);
+
+        for (LobbyClient client : List.of(host, guest)) {
+            Map<String, Object> broadcast = client.nextBroadcast();
+            assertThat(broadcast)
+                    .containsEntry("event", "PLAYER_READY_CHANGED")
+                    .containsEntry("playerId", "guest_114205")
+                    .containsEntry("isReady", true)
+                    .containsEntry("canStartGame", true);
+        }
+
+        guest.ready(roomCode, false);
+
+        for (LobbyClient client : List.of(host, guest)) {
+            Map<String, Object> broadcast = client.nextBroadcast();
+            assertThat(broadcast)
+                    .containsEntry("event", "PLAYER_READY_CHANGED")
+                    .containsEntry("playerId", "guest_114205")
+                    .containsEntry("isReady", false)
+                    .containsEntry("canStartGame", false);
+        }
+    }
+
+    @Test
+    @DisplayName("Should send INVALID_ACTION to a player trying to toggle ready without joining the room")
+    void shouldRejectReadyFromUnseatedPlayer() throws Exception {
+        String roomCode = createRoom(null);
+        LobbyClient outsider = connect("guest_999999", roomCode);
+
+        outsider.ready(roomCode, true);
+
+        assertThat(outsider.nextError())
+                .containsEntry("code", "INVALID_ACTION")
+                .containsEntry("message", "Player is not in this room");
+        assertThat(outsider.states()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Should send INVALID_PAYLOAD when ready payload is malformed")
+    void shouldRejectMalformedReadyPayload() throws Exception {
+        String roomCode = createRoom(null);
+        LobbyClient guest = connect("guest_114205", roomCode);
+        guest.join(roomCode, "#3182CE");
+        guest.nextState();
+
+        stompClient.setMessageConverter(new CompositeMessageConverter(
+                List.of(new SimpleMessageConverter(), new JacksonJsonMessageConverter())));
+        LobbyClient malformedClient = connect("guest_222222", roomCode);
+        malformedClient.join(roomCode, null);
+        guest.nextState();
+        malformedClient.nextState();
+
+        StompHeaders headers = new StompHeaders();
+        headers.setDestination("/app/lobby/" + roomCode + "/ready");
+        headers.setContentType(MimeTypeUtils.APPLICATION_JSON);
+        malformedClient.session().send(headers, "{not valid json".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(malformedClient.nextError())
+                .containsEntry("code", "INVALID_PAYLOAD")
+                .containsEntry("message", "Message payload is malformed.");
+    }
+
+    @Test
+    @DisplayName("Should handle concurrent ready toggles without lost updates in Redis")
+    void shouldHandleConcurrentReadyToggles() throws Exception {
+        String roomCode = createRoom(null);
+        List<String> guests = List.of("guest_100001", "guest_100002", "guest_100003");
+        List<LobbyClient> clients = new ArrayList<>();
+
+        for (String guestId : guests) {
+            LobbyClient client = connect(guestId, roomCode);
+            client.join(roomCode, null);
+            clients.add(client);
+        }
+
+        // Drain initial join states
+        for (LobbyClient client : clients) {
+            while (client.states().poll(100, TimeUnit.MILLISECONDS) != null) {
+                // drain
+            }
+        }
+
+        // Concurrently send ready from all 3 guests
+        clients.parallelStream().forEach(client -> client.ready(roomCode, true));
+
+        // Poll until all 3 have updated or timeout
+        long deadline = System.currentTimeMillis() + 5000;
+        RoomState room = null;
+        while (System.currentTimeMillis() < deadline) {
+            room = roomRepository.findByCode(roomCode).orElseThrow();
+            boolean allGuestsReady = room.getPlayers().stream()
+                    .filter(p -> !p.isHost())
+                    .allMatch(PlayerSlot::isReady);
+            if (allGuestsReady) {
+                break;
+            }
+            Thread.sleep(50);
+        }
+
+        assertThat(room).isNotNull();
+        assertThat(room.getPlayers().stream().filter(p -> !p.isHost()))
+                .allMatch(PlayerSlot::isReady);
+        assertThat(roomService.canStartGame(room)).isTrue();
     }
 }

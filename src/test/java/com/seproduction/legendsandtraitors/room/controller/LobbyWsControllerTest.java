@@ -1,6 +1,7 @@
 package com.seproduction.legendsandtraitors.room.controller;
 
 import com.seproduction.legendsandtraitors.common.exception.GameAlreadyStartedException;
+import com.seproduction.legendsandtraitors.common.exception.InvalidLobbyActionException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidRequestException;
 import com.seproduction.legendsandtraitors.common.exception.PlayerBannedException;
 import com.seproduction.legendsandtraitors.common.exception.RoomFullException;
@@ -8,8 +9,10 @@ import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundExceptio
 import com.seproduction.legendsandtraitors.room.dto.JoinRoomMessage;
 import com.seproduction.legendsandtraitors.room.dto.LobbyErrorMessage;
 import com.seproduction.legendsandtraitors.room.dto.LobbyStateBroadcast;
+import com.seproduction.legendsandtraitors.room.dto.PlayerReadyBroadcast;
 import com.seproduction.legendsandtraitors.room.dto.PlayerSlotDto;
 import com.seproduction.legendsandtraitors.room.dto.RoleSettingsDto;
+import com.seproduction.legendsandtraitors.room.dto.ToggleReadyMessage;
 import com.seproduction.legendsandtraitors.room.model.PlayerSlot;
 import com.seproduction.legendsandtraitors.room.model.RoleSettings;
 import com.seproduction.legendsandtraitors.room.model.RoomState;
@@ -102,6 +105,29 @@ class LobbyWsControllerTest {
     }
 
     @Test
+    @DisplayName("Should toggle ready for the principal and broadcast to the canonical room topic")
+    void shouldToggleReadyAndBroadcast() {
+        PlayerReadyBroadcast expected = new PlayerReadyBroadcast(GUEST.id(), true, true);
+        given(roomService.toggleReady("wxyz89", GUEST.id(), true)).willReturn(expected);
+
+        controller.toggleReady("wxyz89", GUEST, new ToggleReadyMessage(true));
+
+        verify(simpMessagingTemplate).convertAndSend("/topic/lobby/" + ROOM_CODE, expected);
+    }
+
+    @Test
+    @DisplayName("Should treat a null payload in toggleReady as isReady false without NPE")
+    void shouldTreatNullPayloadAsFalseInToggleReady() {
+        PlayerReadyBroadcast expected = new PlayerReadyBroadcast(GUEST.id(), false, false);
+        given(roomService.toggleReady(ROOM_CODE, GUEST.id(), false)).willReturn(expected);
+
+        controller.toggleReady(ROOM_CODE, GUEST, null);
+
+        verify(roomService).toggleReady(ROOM_CODE, GUEST.id(), false);
+        verify(simpMessagingTemplate).convertAndSend("/topic/lobby/" + ROOM_CODE, expected);
+    }
+
+    @Test
     @DisplayName("Should map an unknown room to ROOM_NOT_FOUND")
     void shouldMapRoomNotFound() {
         assertThat(controller.handleGameException(RoomNotFoundException.forRoomCode(ROOM_CODE)))
@@ -170,6 +196,27 @@ class LobbyWsControllerTest {
 
         assertThat(controller.handleInvalidPayload(invalid))
                 .isEqualTo(new LobbyErrorMessage("INVALID_PAYLOAD", "size must be at most 16"));
+    }
+
+    @Test
+    @DisplayName("Should map an unseated player error to INVALID_ACTION")
+    void shouldMapPlayerNotInRoom() {
+        assertThat(controller.handleGameException(new InvalidLobbyActionException("Player is not in this room")))
+                .isEqualTo(new LobbyErrorMessage("INVALID_ACTION", "Player is not in this room"));
+    }
+
+    @Test
+    @DisplayName("Should map missing isReady in ToggleReadyMessage to INVALID_PAYLOAD with constraint message")
+    void shouldMapMissingIsReady() throws NoSuchMethodException {
+        MethodParameter payloadParameter = new MethodParameter(LobbyWsController.class.getDeclaredMethod(
+                "toggleReady", String.class, JwtPrincipal.class, ToggleReadyMessage.class), 2);
+        BindingResult bindingResult = new MapBindingResult(new HashMap<>(), "toggleReadyMessage");
+        bindingResult.rejectValue("isReady", "NotNull", "isReady must not be null.");
+        Message<byte[]> message = MessageBuilder.withPayload(new byte[0]).build();
+        MethodArgumentNotValidException invalid = new MethodArgumentNotValidException(message, payloadParameter, bindingResult);
+
+        assertThat(controller.handleInvalidPayload(invalid))
+                .isEqualTo(new LobbyErrorMessage("INVALID_PAYLOAD", "isReady must not be null."));
     }
 
     @Test
