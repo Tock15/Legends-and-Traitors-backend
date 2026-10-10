@@ -1,5 +1,6 @@
 package com.seproduction.legendsandtraitors.room.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.seproduction.legendsandtraitors.room.model.RoomState;
 
 import java.util.List;
@@ -11,14 +12,19 @@ public record LobbyStateBroadcast(
         String hostId,
         int totalPlayers,
         int maxPlayers,
+        @JsonProperty("canStartGame") boolean canStartGame,
         List<PlayerSlotDto> players,
         RoleSettingsDto settings) {
 
     public static final String EVENT = "LOBBY_STATE";
 
-    public static LobbyStateBroadcast from(RoomState room) {
+    public static LobbyStateBroadcast from(RoomState room, boolean canStartGame) {
         List<PlayerSlotDto> players = room.getPlayers().stream().map(PlayerSlotDto::from).toList();
         return new LobbyStateBroadcast(EVENT, room.getRoomCode(), room.getStatus().name(), room.getHostId(),
-                players.size(), room.getMaxPlayers(), players, RoleSettingsDto.from(room.getSettings()));
+                players.size(), room.getMaxPlayers(), canStartGame, players, RoleSettingsDto.from(room.getSettings()));
+    }
+
+    public static LobbyStateBroadcast from(RoomState room) {
+        return from(room, false);
     }
 }

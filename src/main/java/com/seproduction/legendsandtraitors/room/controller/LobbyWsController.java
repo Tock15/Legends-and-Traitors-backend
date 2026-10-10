@@ -8,6 +8,8 @@ import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundExceptio
 import com.seproduction.legendsandtraitors.room.dto.JoinRoomMessage;
 import com.seproduction.legendsandtraitors.room.dto.LobbyErrorMessage;
 import com.seproduction.legendsandtraitors.room.dto.LobbyStateBroadcast;
+import com.seproduction.legendsandtraitors.room.dto.PlayerReadyBroadcast;
+import com.seproduction.legendsandtraitors.room.dto.ToggleReadyMessage;
 import com.seproduction.legendsandtraitors.room.model.RoomState;
 import com.seproduction.legendsandtraitors.room.service.RoomService;
 import com.seproduction.legendsandtraitors.security.JwtPrincipal;
@@ -25,6 +27,8 @@ import org.springframework.messaging.simp.annotation.SendToUser;
 import org.springframework.stereotype.Controller;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
+
+import java.util.Locale;
 
 @Slf4j
 @Controller
@@ -45,7 +49,19 @@ class LobbyWsController {
               @Valid @Payload(required = false) JoinRoomMessage message) {
         String color = message == null ? null : message.color();
         RoomState room = roomService.joinRoom(roomCode, principal.id(), principal.displayName(), color);
-        simpMessagingTemplate.convertAndSend("/topic/lobby/" + room.getRoomCode(), LobbyStateBroadcast.from(room));
+        boolean canStart = roomService.canStartGame(room);
+        simpMessagingTemplate.convertAndSend("/topic/lobby/" + room.getRoomCode(),
+                LobbyStateBroadcast.from(room, canStart));
+    }
+
+    /** Toggles the ready state of the authenticated caller and broadcasts the result to the room topic. */
+    @MessageMapping("/lobby/{roomCode}/ready")
+    void toggleReady(@DestinationVariable String roomCode,
+                     JwtPrincipal principal,
+                     @Valid @Payload ToggleReadyMessage message) {
+        boolean isReady = message != null && Boolean.TRUE.equals(message.isReady());
+        PlayerReadyBroadcast broadcast = roomService.toggleReady(roomCode, principal.id(), isReady);
+        simpMessagingTemplate.convertAndSend("/topic/lobby/" + roomCode.toUpperCase(Locale.ROOT), broadcast);
     }
 
     @MessageExceptionHandler

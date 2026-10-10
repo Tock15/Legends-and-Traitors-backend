@@ -1,11 +1,13 @@
 package com.seproduction.legendsandtraitors.room.service;
 
 import com.seproduction.legendsandtraitors.common.exception.GameAlreadyStartedException;
+import com.seproduction.legendsandtraitors.common.exception.InvalidLobbyActionException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidRequestException;
 import com.seproduction.legendsandtraitors.common.exception.PlayerBannedException;
 import com.seproduction.legendsandtraitors.common.exception.RoomFullException;
 import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundException;
 import com.seproduction.legendsandtraitors.config.GameRoomProperties;
+import com.seproduction.legendsandtraitors.room.dto.PlayerReadyBroadcast;
 import com.seproduction.legendsandtraitors.room.model.CreateRoomRequest;
 import com.seproduction.legendsandtraitors.room.model.CreateRoomResponse;
 import com.seproduction.legendsandtraitors.room.model.PlayerSlot;
@@ -565,6 +567,268 @@ class RoomServiceTest {
             assertThatThrownBy(() -> roomService.joinRoom(ROOM_CODE, " ", GUEST_NAME, null))
                     .isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> roomService.joinRoom(ROOM_CODE, GUEST_ID, " ", null))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            verifyNoInteractions(roomRepository);
+        }
+    }
+
+    @Nested
+    @DisplayName("toggleReady and canStartGame")
+    class ToggleReady {
+
+        private static final String GUEST_ID = "guest_114205";
+        private static final Instant EARLIER = NOW.minusSeconds(600);
+        private static final long STORED_VERSION = 5;
+
+        private PlayerSlot slot(String id, boolean host, boolean ready) {
+            return PlayerSlot.builder()
+                    .id(id)
+                    .displayName("Name-" + id)
+                    .host(host)
+                    .ready(ready)
+                    .afk(false)
+                    .joinedAt(EARLIER)
+                    .lastActiveAt(EARLIER)
+                    .build();
+        }
+
+        private RoomState room(RoomStatus status, int maxPlayers, PlayerSlot... seated) {
+            return RoomState.builder()
+                    .roomCode(ROOM_CODE)
+                    .status(status)
+                    .hostId(HOST_ID)
+                    .maxPlayers(maxPlayers)
+                    .players(new ArrayList<>(List.of(seated)))
+                    .settings(RoleSettings.builder().king(1).loyalist(1).rebel(1).spy(1).build())
+                    .createdAt(EARLIER)
+                    .lastActiveAt(EARLIER)
+                    .version(STORED_VERSION)
+                    .build();
+        }
+
+        private void givenStored(RoomState room) {
+            given(roomRepository.findByCode(ROOM_CODE)).willReturn(Optional.of(room));
+        }
+
+        private void givenWriteSucceeds() {
+            given(roomRepository.saveIfVersion(any(), anyLong())).willReturn(true);
+        }
+
+        private RoomState writtenRoom() {
+            ArgumentCaptor<RoomState> captor = ArgumentCaptor.forClass(RoomState.class);
+            verify(roomRepository).saveIfVersion(captor.capture(), anyLong());
+            return captor.getValue();
+        }
+
+        private PlayerSlot slotOf(RoomState room, String playerId) {
+            return room.getPlayers().stream().filter(s -> s.getId().equals(playerId)).findFirst().orElseThrow();
+        }
+
+        @Test
+        @DisplayName("Should toggle guest ready to true, evaluate canStartGame and broadcast")
+        void shouldToggleReadyForGuest() {
+            RoomState room = room(RoomStatus.LOBBY, 4,
+                    slot(HOST_ID, true, true),
+                    slot("guest_1", false, true),
+                    slot("guest_2", false, true),
+                    slot(GUEST_ID, false, false));
+            givenStored(room);
+            givenWriteSucceeds();
+
+            PlayerReadyBroadcast broadcast = roomService.toggleReady(ROOM_CODE, GUEST_ID, true);
+
+            assertThat(broadcast.event()).isEqualTo(PlayerReadyBroadcast.EVENT);
+            assertThat(broadcast.playerId()).isEqualTo(GUEST_ID);
+            assertThat(broadcast.isReady()).isTrue();
+            assertThat(broadcast.canStartGame()).isTrue();
+
+            RoomState written = writtenRoom();
+            assertThat(slotOf(written, GUEST_ID).isReady()).isTrue();
+            assertThat(slotOf(written, GUEST_ID).getLastActiveAt()).isEqualTo(NOW);
+            assertThat(slotOf(written, GUEST_ID).isAfk()).isFalse();
+            assertThat(written.getLastActiveAt()).isEqualTo(NOW);
+            assertThat(written.getVersion()).isEqualTo(STORED_VERSION + 1);
+        }
+
+        @Test
+        @DisplayName("Should toggle guest ready to false and reflect canStartGame as false")
+        void shouldToggleUnreadyForGuest() {
+            RoomState room = room(RoomStatus.LOBBY, 4,
+                    slot(HOST_ID, true, true),
+                    slot("guest_1", false, true),
+                    slot("guest_2", false, true),
+                    slot(GUEST_ID, false, true));
+            givenStored(room);
+            givenWriteSucceeds();
+
+            PlayerReadyBroadcast broadcast = roomService.toggleReady(ROOM_CODE, GUEST_ID, false);
+
+            assertThat(broadcast.playerId()).isEqualTo(GUEST_ID);
+            assertThat(broadcast.isReady()).isFalse();
+            assertThat(broadcast.canStartGame()).isFalse();
+            assertThat(slotOf(writtenRoom(), GUEST_ID).isReady()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should keep host always ready when host sends isReady false")
+        void shouldKeepHostAlwaysReady() {
+            RoomState room = room(RoomStatus.LOBBY, 4,
+                    slot(HOST_ID, true, true),
+                    slot(GUEST_ID, false, true));
+            givenStored(room);
+            givenWriteSucceeds();
+
+            PlayerReadyBroadcast broadcast = roomService.toggleReady(ROOM_CODE, HOST_ID, false);
+
+            assertThat(broadcast.playerId()).isEqualTo(HOST_ID);
+            assertThat(broadcast.isReady()).isTrue();
+            assertThat(slotOf(writtenRoom(), HOST_ID).isReady()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Should clear AFK flag when player toggles ready")
+        void shouldClearAfkOnToggleReady() {
+            PlayerSlot guestSlot = slot(GUEST_ID, false, false);
+            guestSlot.setAfk(true);
+            RoomState room = room(RoomStatus.LOBBY, 4, slot(HOST_ID, true, true), guestSlot);
+            givenStored(room);
+            givenWriteSucceeds();
+
+            roomService.toggleReady(ROOM_CODE, GUEST_ID, true);
+
+            assertThat(slotOf(writtenRoom(), GUEST_ID).isAfk()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should look up room by uppercase room code")
+        void shouldLookUpByUppercaseCode() {
+            RoomState room = room(RoomStatus.LOBBY, 4, slot(HOST_ID, true, true), slot(GUEST_ID, false, false));
+            givenStored(room);
+            givenWriteSucceeds();
+
+            roomService.toggleReady("wxyz89", GUEST_ID, true);
+
+            verify(roomRepository).findByCode(ROOM_CODE);
+        }
+
+        @Test
+        @DisplayName("Should evaluate canStartGame as false when total players is below minimum threshold")
+        void shouldEvaluateCanStartGameFalseWhenBelowMinPlayers() {
+            gameRoomProperties.setMinPlayers(4);
+            RoomState room = room(RoomStatus.LOBBY, 4,
+                    slot(HOST_ID, true, true),
+                    slot(GUEST_ID, false, false));
+            givenStored(room);
+            givenWriteSucceeds();
+
+            PlayerReadyBroadcast broadcast = roomService.toggleReady(ROOM_CODE, GUEST_ID, true);
+
+            assertThat(broadcast.canStartGame()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should evaluate canStartGame as true when min players is 2 and all non-hosts ready")
+        void shouldEvaluateCanStartGameTrueWhenDevMinPlayersMet() {
+            gameRoomProperties.setMinPlayers(2);
+            RoomState room = room(RoomStatus.LOBBY, 4,
+                    slot(HOST_ID, true, true),
+                    slot(GUEST_ID, false, false));
+            givenStored(room);
+            givenWriteSucceeds();
+
+            PlayerReadyBroadcast broadcast = roomService.toggleReady(ROOM_CODE, GUEST_ID, true);
+
+            assertThat(broadcast.canStartGame()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Should evaluate canStartGame as false when room status is not LOBBY")
+        void shouldEvaluateCanStartGameFalseWhenNotLobby() {
+            RoomState room = room(RoomStatus.GAME_ACTIVE, 4,
+                    slot(HOST_ID, true, true),
+                    slot("guest_1", false, true),
+                    slot("guest_2", false, true),
+                    slot(GUEST_ID, false, true));
+
+            assertThat(roomService.canStartGame(room)).isFalse();
+            assertThat(roomService.canStartGame(null)).isFalse();
+        }
+
+        @Test
+        @DisplayName("Should reject ready toggle when room is not found")
+        void shouldRejectWhenRoomNotFound() {
+            given(roomRepository.findByCode(ROOM_CODE)).willReturn(Optional.empty());
+
+            assertThatThrownBy(() -> roomService.toggleReady(ROOM_CODE, GUEST_ID, true))
+                    .isInstanceOf(RoomNotFoundException.class);
+
+            verify(roomRepository, never()).saveIfVersion(any(), anyLong());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = RoomStatus.class, names = "LOBBY", mode = EnumSource.Mode.EXCLUDE)
+        @DisplayName("Should reject ready toggle when room status is not LOBBY")
+        void shouldRejectWhenGameAlreadyStarted(RoomStatus status) {
+            givenStored(room(status, 4, slot(HOST_ID, true, true), slot(GUEST_ID, false, false)));
+
+            assertThatThrownBy(() -> roomService.toggleReady(ROOM_CODE, GUEST_ID, true))
+                    .isInstanceOf(GameAlreadyStartedException.class);
+
+            verify(roomRepository, never()).saveIfVersion(any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Should reject ready toggle when player is not seated in room")
+        void shouldRejectWhenPlayerNotInRoom() {
+            givenStored(room(RoomStatus.LOBBY, 4, slot(HOST_ID, true, true)));
+
+            assertThatThrownBy(() -> roomService.toggleReady(ROOM_CODE, "unseated_player", true))
+                    .isInstanceOf(InvalidLobbyActionException.class)
+                    .hasMessage("Player is not in this room");
+
+            verify(roomRepository, never()).saveIfVersion(any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Should retry lost write on fresh read after CAS collision")
+        void shouldRetryOnCasCollision() {
+            RoomState beforeRace = room(RoomStatus.LOBBY, 4, slot(HOST_ID, true, true), slot(GUEST_ID, false, false));
+            RoomState afterRace = room(RoomStatus.LOBBY, 4,
+                    slot(HOST_ID, true, true),
+                    slot("guest_racer", false, true),
+                    slot(GUEST_ID, false, false));
+            afterRace.setVersion(STORED_VERSION + 1);
+
+            given(roomRepository.findByCode(ROOM_CODE)).willReturn(Optional.of(beforeRace), Optional.of(afterRace));
+            given(roomRepository.saveIfVersion(any(), anyLong())).willReturn(false, true);
+
+            PlayerReadyBroadcast broadcast = roomService.toggleReady(ROOM_CODE, GUEST_ID, true);
+
+            assertThat(broadcast.isReady()).isTrue();
+            verify(roomRepository, times(2)).saveIfVersion(any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Should give up after three lost writes")
+        void shouldGiveUpAfterThreeLostWrites() {
+            given(roomRepository.findByCode(ROOM_CODE))
+                    .willAnswer(inv -> Optional.of(room(RoomStatus.LOBBY, 4, slot(HOST_ID, true, true), slot(GUEST_ID, false, false))));
+            given(roomRepository.saveIfVersion(any(), anyLong())).willReturn(false);
+
+            assertThatThrownBy(() -> roomService.toggleReady(ROOM_CODE, GUEST_ID, true))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("Unable to update ready state for room WXYZ89 after 3 conflicting writes");
+
+            verify(roomRepository, times(3)).saveIfVersion(any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Should reject blank arguments before checking Redis")
+        void shouldRejectBlankArguments() {
+            assertThatThrownBy(() -> roomService.toggleReady(" ", GUEST_ID, true))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> roomService.toggleReady(ROOM_CODE, " ", true))
                     .isInstanceOf(IllegalArgumentException.class);
 
             verifyNoInteractions(roomRepository);
