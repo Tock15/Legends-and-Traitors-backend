@@ -49,7 +49,9 @@ class LobbyWsController {
               @Valid @Payload(required = false) JoinRoomMessage message) {
         String color = message == null ? null : message.color();
         RoomState room = roomService.joinRoom(roomCode, principal.id(), principal.displayName(), color);
-        simpMessagingTemplate.convertAndSend("/topic/lobby/" + room.getRoomCode(), LobbyStateBroadcast.from(room));
+        boolean canStart = roomService.canStartGame(room);
+        simpMessagingTemplate.convertAndSend("/topic/lobby/" + room.getRoomCode(),
+                LobbyStateBroadcast.from(room, canStart));
     }
 
     /** Toggles the ready state of the authenticated caller and broadcasts the result to the room topic. */

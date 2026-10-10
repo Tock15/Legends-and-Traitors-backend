@@ -88,7 +88,7 @@ class LobbyWsControllerTest {
         ArgumentCaptor<LobbyStateBroadcast> captor = ArgumentCaptor.forClass(LobbyStateBroadcast.class);
         verify(simpMessagingTemplate).convertAndSend(eq("/topic/lobby/" + ROOM_CODE), captor.capture());
         assertThat(captor.getValue()).isEqualTo(new LobbyStateBroadcast(
-                "LOBBY_STATE", ROOM_CODE, "LOBBY", "guest_948201", 2, 8,
+                "LOBBY_STATE", ROOM_CODE, "LOBBY", "guest_948201", 2, 8, false,
                 List.of(new PlayerSlotDto("guest_948201", "Guest948201", true, true, false, "#E53E3E"),
                         new PlayerSlotDto(GUEST.id(), GUEST.displayName(), false, false, false, "#3182CE")),
                 new RoleSettingsDto(1, 2, 3, 1)));
@@ -102,6 +102,20 @@ class LobbyWsControllerTest {
         controller.join(ROOM_CODE, GUEST, null);
 
         verify(roomService).joinRoom(ROOM_CODE, GUEST.id(), GUEST.displayName(), null);
+    }
+
+    @Test
+    @DisplayName("Should include evaluated canStartGame in LOBBY_STATE broadcast when joining")
+    void shouldIncludeCanStartGameInLobbyStateBroadcast() {
+        RoomState room = joinedRoom();
+        given(roomService.joinRoom(ROOM_CODE, GUEST.id(), GUEST.displayName(), null)).willReturn(room);
+        given(roomService.canStartGame(room)).willReturn(true);
+
+        controller.join(ROOM_CODE, GUEST, null);
+
+        ArgumentCaptor<LobbyStateBroadcast> captor = ArgumentCaptor.forClass(LobbyStateBroadcast.class);
+        verify(simpMessagingTemplate).convertAndSend(eq("/topic/lobby/" + ROOM_CODE), captor.capture());
+        assertThat(captor.getValue().canStartGame()).isTrue();
     }
 
     @Test

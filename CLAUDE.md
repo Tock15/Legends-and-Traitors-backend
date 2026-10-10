@@ -286,7 +286,7 @@ logs and swallows the exception, and the client just hangs.
 
 | Destination | Event | Contents |
 | --- | --- | --- |
-| `/topic/lobby/{roomCode}` | `LOBBY_STATE` | event, roomCode, status, hostId, totalPlayers, maxPlayers, players[] (id, displayName, isHost, isReady, isAfk, color), settings (king, loyalist, rebel, spy) — repo-verified |
+| `/topic/lobby/{roomCode}` | `LOBBY_STATE` | event, roomCode, status, hostId, totalPlayers, maxPlayers, canStartGame, players[] (id, displayName, isHost, isReady, isAfk, color), settings (king, loyalist, rebel, spy) — repo-verified |
 | `/topic/lobby/{roomCode}` | `PLAYER_READY_CHANGED` | event, playerId, isReady, canStartGame (repo-verified: `room/controller/LobbyWsController.java`) |
 | `/topic/lobby/{roomCode}` | `CHAT_MESSAGE` | senderId, senderName, senderColor, message, ISO timestamp |
 | `/topic/lobby/{roomCode}` | `GAME_STARTED` | roomCode, turnPlayerId |

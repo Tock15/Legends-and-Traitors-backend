@@ -213,6 +213,7 @@ class LobbyWsControllerIntegrationTest {
                 .containsEntry("status", "LOBBY")
                 .containsEntry("hostId", HOST_ID)
                 .containsEntry("maxPlayers", 8)
+                .containsEntry("canStartGame", false)
                 .containsEntry("settings", Map.of("king", 1, "loyalist", 1, "rebel", 1, "spy", 1));
         assertThat(players(lastState)).extracting(p -> p.get("id")).containsExactlyElementsOf(ids);
         assertThat(players(lastState)).extracting(p -> p.get("color")).containsExactlyElementsOf(colors);
@@ -480,5 +481,40 @@ class LobbyWsControllerIntegrationTest {
         assertThat(room.getPlayers().stream().filter(p -> !p.isHost()))
                 .allMatch(PlayerSlot::isReady);
         assertThat(roomService.canStartGame(room)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Should broadcast LOBBY_STATE with canStartGame=false when new unready guest joins previously ready lobby")
+    void shouldBroadcastLobbyStateWithCanStartGameWhenNewGuestJoins() throws Exception {
+        String roomCode = createRoom(null);
+        LobbyClient host = connect(HOST_ID, roomCode);
+        host.join(roomCode, "#E53E3E");
+        host.nextState();
+
+        LobbyClient guest1 = connect("guest_114205", roomCode);
+        guest1.join(roomCode, "#3182CE");
+        Map<String, Object> stateAfterGuest1Join = host.nextState();
+        guest1.nextState();
+        assertThat(stateAfterGuest1Join).containsEntry("canStartGame", false);
+
+        // Guest 1 readies up -> min-players is 2 in test profile, so canStartGame becomes true
+        guest1.ready(roomCode, true);
+        Map<String, Object> readyBroadcastHost = host.nextBroadcast();
+        guest1.nextBroadcast();
+        assertThat(readyBroadcastHost)
+                .containsEntry("event", "PLAYER_READY_CHANGED")
+                .containsEntry("canStartGame", true);
+
+        // Now Guest 2 joins -> not ready -> LOBBY_STATE must broadcast canStartGame = false
+        LobbyClient guest2 = connect("guest_220011", roomCode);
+        guest2.join(roomCode, "#38A169");
+
+        Map<String, Object> stateAfterGuest2JoinHost = host.nextState();
+        guest1.nextState();
+        guest2.nextState();
+
+        assertThat(stateAfterGuest2JoinHost)
+                .containsEntry("event", "LOBBY_STATE")
+                .containsEntry("canStartGame", false);
     }
 }
