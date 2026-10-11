@@ -31,6 +31,9 @@ public class RoomState {
 
     private Instant createdAt;
 
+    // Null until the host starts the game.
+    private Instant startedAt;
+
     private Instant lastActiveAt;
 
     // Checked by RoomRepository#saveIfVersion only; plain save neither checks nor advances it.

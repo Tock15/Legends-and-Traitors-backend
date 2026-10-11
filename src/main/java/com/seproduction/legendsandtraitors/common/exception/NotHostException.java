@@ -18,6 +18,6 @@ public class NotHostException extends BaseGameException {
     }
 
     public static NotHostException forAction(String action) {
-        return new NotHostException("Only the room host is permitted to " + action + ".");
+        return new NotHostException("Only the lobby host can " + action + ".");
     }
 }

@@ -32,6 +32,7 @@ import org.springframework.web.socket.messaging.WebSocketStompClient;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -160,6 +161,10 @@ class LobbyWsControllerIntegrationTest {
         void ready(String roomCode, Boolean isReady) {
             session.send("/app/lobby/" + roomCode + "/ready",
                     isReady == null ? Map.of() : Map.of("isReady", isReady));
+        }
+
+        void start(String roomCode) {
+            session.send("/app/lobby/" + roomCode + "/start", Map.of());
         }
 
         Map<String, Object> nextBroadcast() throws InterruptedException {
@@ -516,5 +521,195 @@ class LobbyWsControllerIntegrationTest {
         assertThat(stateAfterGuest2JoinHost)
                 .containsEntry("event", "LOBBY_STATE")
                 .containsEntry("canStartGame", false);
+    }
+
+    /** Joins each player over STOMP in turn and consumes every LOBBY_STATE, proving each subscription is live. */
+    private List<LobbyClient> seatOverStomp(String roomCode, List<String> playerIds) throws Exception {
+        List<LobbyClient> seated = new ArrayList<>();
+        for (String playerId : playerIds) {
+            LobbyClient client = connect(playerId, roomCode);
+            client.join(roomCode, null);
+            seated.add(client);
+            for (LobbyClient subscriber : seated) {
+                subscriber.nextState();
+            }
+        }
+        return seated;
+    }
+
+    private void readyUp(String roomCode, List<String> playerIds) {
+        playerIds.forEach(playerId -> roomService.toggleReady(roomCode, playerId, true));
+    }
+
+    private RoomState storedRoom(String roomCode) {
+        return roomRepository.findByCode(roomCode).orElseThrow();
+    }
+
+    private static void assertGameStarted(Map<String, Object> broadcast, String roomCode, int playerCount,
+                                          Instant storedStartedAt) {
+        assertThat(broadcast)
+                .containsOnlyKeys("event", "roomCode", "status", "playerCount", "startedAt")
+                .containsEntry("event", "GAME_STARTED")
+                .containsEntry("roomCode", roomCode)
+                .containsEntry("status", "GAME_ACTIVE")
+                .containsEntry("playerCount", playerCount);
+        assertThat(broadcast.get("startedAt")).isInstanceOf(String.class);
+        assertThat(Instant.parse((String) broadcast.get("startedAt"))).isEqualTo(storedStartedAt);
+    }
+
+    private void assertStillInLobby(String roomCode) {
+        RoomState room = storedRoom(roomCode);
+        assertThat(room.getStatus()).isEqualTo(RoomStatus.LOBBY);
+        assertThat(room.getStartedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("Should start a 2-player lobby at the test profile's minimum and broadcast GAME_STARTED to both players")
+    void shouldStartTwoPlayerLobby() throws Exception {
+        String roomCode = createRoom(null);
+        List<LobbyClient> clients = seatOverStomp(roomCode, List.of(HOST_ID, "guest_114205"));
+        readyUp(roomCode, List.of("guest_114205"));
+
+        clients.getFirst().start(roomCode);
+
+        List<Map<String, Object>> broadcasts = new ArrayList<>();
+        for (LobbyClient client : clients) {
+            broadcasts.add(client.nextBroadcast());
+        }
+        RoomState stored = storedRoom(roomCode);
+        assertThat(stored.getStatus()).isEqualTo(RoomStatus.GAME_ACTIVE);
+        assertThat(stored.getStartedAt()).isNotNull();
+        broadcasts.forEach(broadcast -> assertGameStarted(broadcast, roomCode, 2, stored.getStartedAt()));
+        clients.forEach(client -> assertThat(client.errors()).isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should broadcast GAME_STARTED to every subscriber of a ready 4-player lobby")
+    void shouldStartFourPlayerLobby() throws Exception {
+        String roomCode = createRoom(null);
+        List<String> guests = List.of("guest_114205", "guest_220011", "guest_330022");
+        List<LobbyClient> clients = seatOverStomp(roomCode,
+                List.of(HOST_ID, guests.get(0), guests.get(1), guests.get(2)));
+        readyUp(roomCode, guests);
+
+        clients.getFirst().start(roomCode);
+
+        List<Map<String, Object>> broadcasts = new ArrayList<>();
+        for (LobbyClient client : clients) {
+            broadcasts.add(client.nextBroadcast());
+        }
+        Instant startedAt = storedRoom(roomCode).getStartedAt();
+        broadcasts.forEach(broadcast -> assertGameStarted(broadcast, roomCode, 4, startedAt));
+    }
+
+    @Test
+    @DisplayName("Should send NOT_HOST only to a guest who tries to start, leaving the room in LOBBY")
+    void shouldRejectStartFromNonHost() throws Exception {
+        String roomCode = createRoom(null);
+        List<LobbyClient> clients = seatOverStomp(roomCode, List.of(HOST_ID, "guest_114205"));
+        readyUp(roomCode, List.of("guest_114205"));
+        LobbyClient host = clients.get(0);
+        LobbyClient guest = clients.get(1);
+
+        guest.start(roomCode);
+
+        assertThat(guest.nextError())
+                .containsEntry("code", "NOT_HOST")
+                .containsEntry("message", "Only the lobby host can start the game.");
+        assertThat(host.errors()).isEmpty();
+        assertThat(host.states()).isEmpty();
+        assertThat(guest.states()).isEmpty();
+        assertStillInLobby(roomCode);
+    }
+
+    @Test
+    @DisplayName("Should send PLAYERS_NOT_READY when a guest is not ready, leaving the room in LOBBY")
+    void shouldRejectStartWithUnreadyGuest() throws Exception {
+        String roomCode = createRoom(null);
+        LobbyClient host = seatOverStomp(roomCode, List.of(HOST_ID, "guest_114205")).getFirst();
+
+        host.start(roomCode);
+
+        assertThat(host.nextError())
+                .containsEntry("code", "PLAYERS_NOT_READY")
+                .containsEntry("message", "All players must be ready before starting.");
+        assertThat(host.states()).isEmpty();
+        assertStillInLobby(roomCode);
+    }
+
+    @Test
+    @DisplayName("Should send MIN_PLAYERS_NOT_MET quoting the test profile's minimum of 2 when the host is alone")
+    void shouldRejectStartBelowMinimum() throws Exception {
+        String roomCode = createRoom(null);
+        LobbyClient host = seatOverStomp(roomCode, List.of(HOST_ID)).getFirst();
+
+        host.start(roomCode);
+
+        assertThat(host.nextError())
+                .containsEntry("code", "MIN_PLAYERS_NOT_MET")
+                .containsEntry("message", "At least 2 players required to start.");
+        assertThat(host.states()).isEmpty();
+        assertStillInLobby(roomCode);
+    }
+
+    @Test
+    @DisplayName("Should send ROOM_IN_GAME to a repeat start, a ready toggle and a newcomer once the game has started")
+    void shouldRejectLobbyActionsAfterStart() throws Exception {
+        String roomCode = createRoom(null);
+        List<LobbyClient> clients = seatOverStomp(roomCode, List.of(HOST_ID, "guest_114205"));
+        readyUp(roomCode, List.of("guest_114205"));
+        LobbyClient host = clients.get(0);
+        LobbyClient guest = clients.get(1);
+        host.start(roomCode);
+        host.nextBroadcast();
+        guest.nextBroadcast();
+        Instant firstStart = storedRoom(roomCode).getStartedAt();
+
+        host.start(roomCode);
+        guest.ready(roomCode, false);
+        LobbyClient newcomer = connect("guest_220011", roomCode);
+        newcomer.join(roomCode, null);
+
+        for (LobbyClient client : List.of(host, guest, newcomer)) {
+            assertThat(client.nextError())
+                    .containsEntry("code", "ROOM_IN_GAME")
+                    .containsEntry("message", "Game is already in progress.");
+        }
+        clients.forEach(client -> assertThat(client.states()).isEmpty());
+        RoomState stored = storedRoom(roomCode);
+        assertThat(stored.getStatus()).isEqualTo(RoomStatus.GAME_ACTIVE);
+        assertThat(stored.getStartedAt()).isEqualTo(firstStart);
+        assertThat(stored.getPlayers()).extracting(PlayerSlot::getId).containsExactly(HOST_ID, "guest_114205");
+    }
+
+    @Test
+    @DisplayName("Should start the game from a bare SEND frame with an empty body")
+    void shouldStartFromEmptyTriggerFrame() throws Exception {
+        String roomCode = createRoom(null);
+        List<LobbyClient> clients = seatOverStomp(roomCode, List.of(HOST_ID, "guest_114205"));
+        readyUp(roomCode, List.of("guest_114205"));
+        StompHeaders headers = new StompHeaders();
+        headers.setDestination("/app/lobby/" + roomCode + "/start");
+
+        clients.getFirst().session().send(headers, new byte[0]);
+
+        Map<String, Object> broadcast = clients.getFirst().nextBroadcast();
+        assertGameStarted(broadcast, roomCode, 2, storedRoom(roomCode).getStartedAt());
+    }
+
+    @Test
+    @DisplayName("Should accept a lower-case room code on start and broadcast on the canonical upper-case topic")
+    void shouldStartWithLowerCaseCode() throws Exception {
+        String roomCode = createRoom(null);
+        List<LobbyClient> clients = seatOverStomp(roomCode, List.of(HOST_ID, "guest_114205"));
+        readyUp(roomCode, List.of("guest_114205"));
+
+        clients.getFirst().start(roomCode.toLowerCase());
+
+        for (LobbyClient client : clients) {
+            assertThat(client.nextBroadcast())
+                    .containsEntry("event", "GAME_STARTED")
+                    .containsEntry("roomCode", roomCode);
+        }
     }
 }

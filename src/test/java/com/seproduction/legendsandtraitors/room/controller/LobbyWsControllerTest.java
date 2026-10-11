@@ -1,11 +1,15 @@
 package com.seproduction.legendsandtraitors.room.controller;
 
 import com.seproduction.legendsandtraitors.common.exception.GameAlreadyStartedException;
+import com.seproduction.legendsandtraitors.common.exception.InsufficientPlayersException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidLobbyActionException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidRequestException;
+import com.seproduction.legendsandtraitors.common.exception.NotHostException;
 import com.seproduction.legendsandtraitors.common.exception.PlayerBannedException;
+import com.seproduction.legendsandtraitors.common.exception.PlayersNotReadyException;
 import com.seproduction.legendsandtraitors.common.exception.RoomFullException;
 import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundException;
+import com.seproduction.legendsandtraitors.room.dto.GameStartedBroadcast;
 import com.seproduction.legendsandtraitors.room.dto.JoinRoomMessage;
 import com.seproduction.legendsandtraitors.room.dto.LobbyErrorMessage;
 import com.seproduction.legendsandtraitors.room.dto.LobbyStateBroadcast;
@@ -35,20 +39,25 @@ import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.MapBindingResult;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class LobbyWsControllerTest {
 
     private static final String ROOM_CODE = "WXYZ89";
     private static final JwtPrincipal GUEST = new JwtPrincipal("guest_114205", "Guest114205", true, false);
+    private static final JwtPrincipal HOST = new JwtPrincipal("guest_948201", "Guest948201", true, false);
+    private static final Instant STARTED_AT = Instant.parse("2026-09-08T14:35:00Z");
 
     @Mock
     private RoomService roomService;
@@ -139,6 +148,54 @@ class LobbyWsControllerTest {
 
         verify(roomService).toggleReady(ROOM_CODE, GUEST.id(), false);
         verify(simpMessagingTemplate).convertAndSend("/topic/lobby/" + ROOM_CODE, expected);
+    }
+
+    @Test
+    @DisplayName("Should start the game as the principal and broadcast GAME_STARTED to the canonical room topic")
+    void shouldStartGameAndBroadcast() {
+        RoomState started = joinedRoom();
+        started.setStatus(RoomStatus.GAME_ACTIVE);
+        started.setStartedAt(STARTED_AT);
+        given(roomService.startGame("wxyz89", HOST.id())).willReturn(started);
+
+        controller.startGame("wxyz89", HOST);
+
+        verify(simpMessagingTemplate).convertAndSend("/topic/lobby/" + ROOM_CODE,
+                new GameStartedBroadcast("GAME_STARTED", ROOM_CODE, "GAME_ACTIVE", 2, STARTED_AT));
+    }
+
+    @Test
+    @DisplayName("Should broadcast nothing when the start is rejected")
+    void shouldNotBroadcastRejectedStart() {
+        given(roomService.startGame(ROOM_CODE, HOST.id())).willThrow(PlayersNotReadyException.forRoom(ROOM_CODE));
+
+        assertThatThrownBy(() -> controller.startGame(ROOM_CODE, HOST))
+                .isInstanceOf(PlayersNotReadyException.class);
+
+        verifyNoInteractions(simpMessagingTemplate);
+    }
+
+    @Test
+    @DisplayName("Should map a non-host start to NOT_HOST")
+    void shouldMapNotHost() {
+        assertThat(controller.handleGameException(NotHostException.forAction("start the game")))
+                .isEqualTo(new LobbyErrorMessage("NOT_HOST", "Only the lobby host can start the game."));
+    }
+
+    @Test
+    @DisplayName("Should map too few players to MIN_PLAYERS_NOT_MET quoting the configured minimum")
+    void shouldMapInsufficientPlayers() {
+        assertThat(controller.handleGameException(InsufficientPlayersException.forRoom(ROOM_CODE, 4)))
+                .isEqualTo(new LobbyErrorMessage("MIN_PLAYERS_NOT_MET", "At least 4 players required to start."));
+        assertThat(controller.handleGameException(InsufficientPlayersException.forRoom(ROOM_CODE, 2)))
+                .isEqualTo(new LobbyErrorMessage("MIN_PLAYERS_NOT_MET", "At least 2 players required to start."));
+    }
+
+    @Test
+    @DisplayName("Should map unready players to PLAYERS_NOT_READY")
+    void shouldMapPlayersNotReady() {
+        assertThat(controller.handleGameException(PlayersNotReadyException.forRoom(ROOM_CODE)))
+                .isEqualTo(new LobbyErrorMessage("PLAYERS_NOT_READY", "All players must be ready before starting."));
     }
 
     @Test

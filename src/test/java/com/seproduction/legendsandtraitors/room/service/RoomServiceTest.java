@@ -1,9 +1,12 @@
 package com.seproduction.legendsandtraitors.room.service;
 
 import com.seproduction.legendsandtraitors.common.exception.GameAlreadyStartedException;
+import com.seproduction.legendsandtraitors.common.exception.InsufficientPlayersException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidLobbyActionException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidRequestException;
+import com.seproduction.legendsandtraitors.common.exception.NotHostException;
 import com.seproduction.legendsandtraitors.common.exception.PlayerBannedException;
+import com.seproduction.legendsandtraitors.common.exception.PlayersNotReadyException;
 import com.seproduction.legendsandtraitors.common.exception.RoomFullException;
 import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundException;
 import com.seproduction.legendsandtraitors.config.GameRoomProperties;
@@ -36,11 +39,13 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -832,6 +837,347 @@ class RoomServiceTest {
                     .isInstanceOf(IllegalArgumentException.class);
 
             verifyNoInteractions(roomRepository);
+        }
+    }
+
+    @Nested
+    @DisplayName("startGame")
+    class StartGame {
+
+        private static final String GUEST_ID = "guest_1";
+        private static final Instant EARLIER = NOW.minusSeconds(600);
+        private static final long STORED_VERSION = 9;
+
+        private PlayerSlot slot(String id, boolean host, boolean ready) {
+            return PlayerSlot.builder()
+                    .id(id)
+                    .displayName("Name-" + id)
+                    .host(host)
+                    .ready(ready)
+                    .afk(false)
+                    .joinedAt(EARLIER)
+                    .lastActiveAt(EARLIER)
+                    .build();
+        }
+
+        private RoomState room(RoomStatus status, List<PlayerSlot> seated) {
+            return RoomState.builder()
+                    .roomCode(ROOM_CODE)
+                    .status(status)
+                    .hostId(HOST_ID)
+                    .maxPlayers(8)
+                    .players(new ArrayList<>(seated))
+                    .settings(RoleSettings.builder().king(1).loyalist(1).rebel(1).spy(1).build())
+                    .createdAt(EARLIER)
+                    .lastActiveAt(EARLIER)
+                    .version(STORED_VERSION)
+                    .build();
+        }
+
+        /** The host plus guests {@code guest_1..guest_n}, the first {@code readyGuests} of them ready. */
+        private RoomState lobby(int guests, int readyGuests) {
+            List<PlayerSlot> seated = new ArrayList<>(List.of(slot(HOST_ID, true, true)));
+            for (int i = 0; i < guests; i++) {
+                seated.add(slot("guest_" + (i + 1), false, i < readyGuests));
+            }
+            return room(RoomStatus.LOBBY, seated);
+        }
+
+        private void givenStored(RoomState room) {
+            given(roomRepository.findByCode(ROOM_CODE)).willReturn(Optional.of(room));
+        }
+
+        private void givenWriteSucceeds() {
+            given(roomRepository.saveIfVersion(any(), anyLong())).willReturn(true);
+        }
+
+        private void assertNothingWritten() {
+            verify(roomRepository, never()).saveIfVersion(any(), anyLong());
+            verify(roomRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Should start a fully ready 4-player lobby at the default minimum, writing against the read version")
+        void shouldStartReadyLobbyAtDefaultMinimum() {
+            givenStored(lobby(3, 3));
+            givenWriteSucceeds();
+
+            RoomState started = roomService.startGame(ROOM_CODE, HOST_ID);
+
+            ArgumentCaptor<RoomState> captor = ArgumentCaptor.forClass(RoomState.class);
+            verify(roomRepository).saveIfVersion(captor.capture(), eq(STORED_VERSION));
+            RoomState written = captor.getValue();
+            assertThat(written).isSameAs(started);
+            assertThat(written.getStatus()).isEqualTo(RoomStatus.GAME_ACTIVE);
+            assertThat(written.getStartedAt()).isEqualTo(NOW);
+            assertThat(written.getLastActiveAt()).isEqualTo(NOW);
+            assertThat(written.getVersion()).isEqualTo(STORED_VERSION + 1);
+            assertThat(written.getPlayers()).extracting(PlayerSlot::getId)
+                    .containsExactly(HOST_ID, "guest_1", "guest_2", "guest_3");
+            verify(roomRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Should start a 2-player lobby when game.room.min-players is 2")
+        void shouldStartTwoPlayerLobbyWhenMinimumIsTwo() {
+            gameRoomProperties.setMinPlayers(2);
+            givenStored(lobby(1, 1));
+            givenWriteSucceeds();
+
+            assertThat(roomService.startGame(ROOM_CODE, HOST_ID).getStatus()).isEqualTo(RoomStatus.GAME_ACTIVE);
+        }
+
+        @Test
+        @DisplayName("Should truncate the start instant to the millisecond Redis can store")
+        void shouldTruncateStartInstantToMillis() {
+            roomService = new RoomService(roomCodeGenerator, roomRepository, gameRoomProperties,
+                    Clock.fixed(Instant.parse("2026-09-08T14:35:00.401563200Z"), ZoneOffset.UTC));
+            givenStored(lobby(3, 3));
+            givenWriteSucceeds();
+
+            RoomState started = roomService.startGame(ROOM_CODE, HOST_ID);
+
+            assertThat(started.getStartedAt()).isEqualTo(Instant.parse("2026-09-08T14:35:00.401Z"));
+        }
+
+        @Test
+        @DisplayName("Should look the room up by its upper-cased code")
+        void shouldUpperCaseRoomCodeBeforeLookup() {
+            givenStored(lobby(3, 3));
+            givenWriteSucceeds();
+
+            RoomState started = roomService.startGame("wxyz89", HOST_ID);
+
+            verify(roomRepository).findByCode(ROOM_CODE);
+            assertThat(started.getRoomCode()).isEqualTo(ROOM_CODE);
+        }
+
+        @Test
+        @DisplayName("Should reject an unknown room without writing anything")
+        void shouldRejectUnknownRoom() {
+            given(roomRepository.findByCode(ROOM_CODE)).willReturn(Optional.empty());
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOf(RoomNotFoundException.class);
+
+            assertNothingWritten();
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = RoomStatus.class, names = "LOBBY", mode = EnumSource.Mode.EXCLUDE)
+        @DisplayName("Should reject a start from the host in every status other than LOBBY, including a repeat start")
+        void shouldRejectNonLobbyStatus(RoomStatus status) {
+            RoomState notLobby = lobby(3, 3);
+            notLobby.setStatus(status);
+            givenStored(notLobby);
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOf(GameAlreadyStartedException.class);
+
+            assertNothingWritten();
+        }
+
+        @Test
+        @DisplayName("Should reject a seated guest as not the host")
+        void shouldRejectSeatedGuest() {
+            givenStored(lobby(3, 3));
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, GUEST_ID))
+                    .isInstanceOf(NotHostException.class)
+                    .hasMessage("Only the lobby host can start the game.");
+
+            assertNothingWritten();
+        }
+
+        @Test
+        @DisplayName("Should reject a player with no seat in the room as not the host")
+        void shouldRejectUnseatedStranger() {
+            givenStored(lobby(3, 3));
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, "guest_999999"))
+                    .isInstanceOf(NotHostException.class);
+
+            assertNothingWritten();
+        }
+
+        @Test
+        @DisplayName("Should reject 3 players at the default minimum of 4, quoting the minimum")
+        void shouldRejectBelowDefaultMinimum() {
+            givenStored(lobby(2, 2));
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOfSatisfying(InsufficientPlayersException.class,
+                            few -> assertThat(few.getMinPlayers()).isEqualTo(4));
+
+            assertNothingWritten();
+        }
+
+        @Test
+        @DisplayName("Should reject the host alone when game.room.min-players is 2, quoting that minimum")
+        void shouldRejectHostAloneAtMinimumOfTwo() {
+            gameRoomProperties.setMinPlayers(2);
+            givenStored(lobby(0, 0));
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOfSatisfying(InsufficientPlayersException.class,
+                            few -> assertThat(few.getMinPlayers()).isEqualTo(2));
+
+            assertNothingWritten();
+        }
+
+        @Test
+        @DisplayName("Should reject a lobby where one guest is not ready")
+        void shouldRejectUnreadyGuest() {
+            givenStored(lobby(3, 2));
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOf(PlayersNotReadyException.class);
+
+            assertNothingWritten();
+        }
+
+        @Test
+        @DisplayName("Should count an AFK guest who is ready")
+        void shouldCountAfkReadyGuest() {
+            RoomState room = lobby(3, 3);
+            room.getPlayers().get(1).setAfk(true);
+            givenStored(room);
+            givenWriteSucceeds();
+
+            assertThat(roomService.startGame(ROOM_CODE, HOST_ID).getStatus()).isEqualTo(RoomStatus.GAME_ACTIVE);
+        }
+
+        @Test
+        @DisplayName("Should still require an AFK guest to be ready")
+        void shouldBlockOnAfkUnreadyGuest() {
+            RoomState room = lobby(3, 2);
+            room.getPlayers().get(3).setAfk(true);
+            givenStored(room);
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOf(PlayersNotReadyException.class);
+        }
+
+        @Test
+        @DisplayName("Should report a started game before checking who sent the start")
+        void shouldCheckStatusBeforeHost() {
+            RoomState active = lobby(3, 3);
+            active.setStatus(RoomStatus.GAME_ACTIVE);
+            givenStored(active);
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, GUEST_ID))
+                    .isInstanceOf(GameAlreadyStartedException.class);
+        }
+
+        @Test
+        @DisplayName("Should report a non-host before an under-filled or unready lobby")
+        void shouldCheckHostBeforeRoster() {
+            givenStored(lobby(1, 0));
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, GUEST_ID))
+                    .isInstanceOf(NotHostException.class);
+        }
+
+        @Test
+        @DisplayName("Should report too few players before unready ones")
+        void shouldCheckMinimumBeforeReadiness() {
+            givenStored(lobby(1, 0));
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOf(InsufficientPlayersException.class);
+        }
+
+        @Test
+        @DisplayName("Should re-check on a fresh read after a lost write, refusing a guest who un-readied in the race")
+        void shouldRevalidateOnRetry() {
+            RoomState afterRace = lobby(3, 2);
+            afterRace.setVersion(STORED_VERSION + 1);
+            given(roomRepository.findByCode(ROOM_CODE)).willReturn(Optional.of(lobby(3, 3)), Optional.of(afterRace));
+            given(roomRepository.saveIfVersion(any(), anyLong())).willReturn(false);
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOf(PlayersNotReadyException.class);
+
+            verify(roomRepository, times(1)).saveIfVersion(any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Should retry a lost write against the fresh version")
+        void shouldRetryLostWriteOnFreshRead() {
+            RoomState afterRace = lobby(3, 3);
+            afterRace.setVersion(STORED_VERSION + 1);
+            given(roomRepository.findByCode(ROOM_CODE)).willReturn(Optional.of(lobby(3, 3)), Optional.of(afterRace));
+            given(roomRepository.saveIfVersion(any(), anyLong())).willReturn(false, true);
+
+            RoomState started = roomService.startGame(ROOM_CODE, HOST_ID);
+
+            ArgumentCaptor<Long> versions = ArgumentCaptor.forClass(Long.class);
+            verify(roomRepository, times(2)).saveIfVersion(any(), versions.capture());
+            assertThat(versions.getAllValues()).containsExactly(STORED_VERSION, STORED_VERSION + 1);
+            assertThat(started).isSameAs(afterRace);
+            assertThat(started.getStatus()).isEqualTo(RoomStatus.GAME_ACTIVE);
+        }
+
+        @Test
+        @DisplayName("Should give up after three lost writes")
+        void shouldGiveUpAfterThreeLostWrites() {
+            given(roomRepository.findByCode(ROOM_CODE)).willAnswer(invocation -> Optional.of(lobby(3, 3)));
+            given(roomRepository.saveIfVersion(any(), anyLong())).willReturn(false);
+
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, HOST_ID))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("Unable to start game in room WXYZ89 after 3 conflicting writes");
+
+            verify(roomRepository, times(3)).findByCode(ROOM_CODE);
+            verify(roomRepository, times(3)).saveIfVersion(any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Should reject blank arguments before touching Redis")
+        void shouldRejectBlankArguments() {
+            assertThatThrownBy(() -> roomService.startGame(" ", HOST_ID))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> roomService.startGame(ROOM_CODE, " "))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            verifyNoInteractions(roomRepository);
+        }
+
+        @ParameterizedTest(name = "min={0}, guests={1}, ready={2}, firstGuestAfk={3} -> {4}")
+        @CsvSource({
+                "4, 3, 3, false, true",
+                "4, 3, 3, true,  true",
+                "4, 3, 2, false, false",
+                "4, 2, 2, false, false",
+                "4, 7, 7, false, true",
+                "3, 2, 2, false, true",
+                "2, 1, 1, false, true",
+                "2, 1, 1, true,  true",
+                "2, 1, 0, true,  false",
+                "2, 0, 0, false, false"
+        })
+        @DisplayName("Should let the host start exactly when canStartGame says the lobby can start")
+        void shouldAgreeWithCanStartGame(int minPlayers, int guests, int readyGuests, boolean firstGuestAfk,
+                                         boolean expected) {
+            gameRoomProperties.setMinPlayers(minPlayers);
+            RoomState snapshot = lobby(guests, readyGuests);
+            RoomState stored = lobby(guests, readyGuests);
+            if (firstGuestAfk) {
+                snapshot.getPlayers().get(1).setAfk(true);
+                stored.getPlayers().get(1).setAfk(true);
+            }
+            givenStored(stored);
+            lenient().when(roomRepository.saveIfVersion(any(), anyLong())).thenReturn(true);
+
+            boolean canStart = roomService.canStartGame(snapshot);
+            Throwable rejection = catchThrowable(() -> roomService.startGame(ROOM_CODE, HOST_ID));
+
+            assertThat(canStart).isEqualTo(expected);
+            if (expected) {
+                assertThat(rejection).isNull();
+            } else {
+                assertThat(rejection).isInstanceOfAny(InsufficientPlayersException.class, PlayersNotReadyException.class);
+            }
         }
     }
 }

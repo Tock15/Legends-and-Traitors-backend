@@ -2,9 +2,12 @@ package com.seproduction.legendsandtraitors.room.controller;
 
 import com.seproduction.legendsandtraitors.common.exception.BaseGameException;
 import com.seproduction.legendsandtraitors.common.exception.GameAlreadyStartedException;
+import com.seproduction.legendsandtraitors.common.exception.InsufficientPlayersException;
 import com.seproduction.legendsandtraitors.common.exception.PlayerBannedException;
+import com.seproduction.legendsandtraitors.common.exception.PlayersNotReadyException;
 import com.seproduction.legendsandtraitors.common.exception.RoomFullException;
 import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundException;
+import com.seproduction.legendsandtraitors.room.dto.GameStartedBroadcast;
 import com.seproduction.legendsandtraitors.room.dto.JoinRoomMessage;
 import com.seproduction.legendsandtraitors.room.dto.LobbyErrorMessage;
 import com.seproduction.legendsandtraitors.room.dto.LobbyStateBroadcast;
@@ -64,6 +67,13 @@ class LobbyWsController {
         simpMessagingTemplate.convertAndSend("/topic/lobby/" + roomCode.toUpperCase(Locale.ROOT), broadcast);
     }
 
+    /** Host only; the body is never read, so an empty frame and {@code {}} both work. */
+    @MessageMapping("/lobby/{roomCode}/start")
+    void startGame(@DestinationVariable String roomCode, JwtPrincipal principal) {
+        RoomState room = roomService.startGame(roomCode, principal.id());
+        simpMessagingTemplate.convertAndSend("/topic/lobby/" + room.getRoomCode(), GameStartedBroadcast.from(room));
+    }
+
     @MessageExceptionHandler
     @SendToUser(destinations = ERRORS_QUEUE, broadcast = false)
     LobbyErrorMessage handleGameException(BaseGameException ex) {
@@ -77,6 +87,10 @@ class LobbyWsController {
                     "This lobby is full (maximum " + full.getMaxPlayers() + " players).");
             case PlayerBannedException banned -> new LobbyErrorMessage(PlayerBannedException.ERROR_CODE,
                     "You have been temporarily removed from this lobby. Please try again later.");
+            case InsufficientPlayersException few -> new LobbyErrorMessage(InsufficientPlayersException.ERROR_CODE,
+                    "At least " + few.getMinPlayers() + " players required to start.");
+            case PlayersNotReadyException notReady -> new LobbyErrorMessage(PlayersNotReadyException.ERROR_CODE,
+                    "All players must be ready before starting.");
             default -> new LobbyErrorMessage(ex.getErrorCode(), ex.getMessage());
         };
     }
