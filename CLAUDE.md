@@ -69,7 +69,7 @@ Full rules — roles, victory matrix, draft, card types, turn cycle:
 | Framework | Spring Boot | **4.1.1** (repo-verified: parent POM) | Design docs say "3.x/4.x"; the POM pins 4.1.1 |
 | Primary DB | PostgreSQL | 16-alpine (repo-verified) | Accounts, credentials, $1 upgrade transactions |
 | Cache / real-time | Redis | 7-alpine (repo-verified) | Room state, presence, session TTLs |
-| Real-time gateway | **STOMP** over Spring WebSocket | broker configured (repo-verified: `config/WebSocketConfig.java`) | Endpoint + CONNECT auth live; lobby join handler in `room/controller/LobbyWsController.java` — see §5.2 |
+| Real-time gateway | **STOMP** over Spring WebSocket | broker configured (repo-verified: `config/WebSocketConfig.java`) | Endpoint + CONNECT auth live; lobby join, ready and start handlers in `room/controller/LobbyWsController.java` — see §5.2 |
 | Persistence | Spring Data JPA | via starter (repo-verified) | `open-in-view: false` on every profile |
 | Build | Apache Maven | wrapper `./mvnw` (repo-verified) | Maven 3.9+ |
 | Codegen | Lombok | optional dep + annotation processor paths (repo-verified) | `@Getter`/`@Setter` used in config classes |
@@ -277,10 +277,12 @@ logs and swallows the exception, and the client just hangs.
 | `/app/lobby/{roomCode}/ready` | `{ isReady }` | Authenticated caller toggles ready; host is invariant (repo-verified: `room/controller/LobbyWsController.java`) |
 | `/app/lobby/{roomCode}/chat` | `{ message }` | |
 | `/app/lobby/{roomCode}/roles` | `{ roles: { king, loyalist, rebel, spy } }` | Host only |
-| `/app/lobby/{roomCode}/start` | — | Host only; requires `canStart` |
+| `/app/lobby/{roomCode}/start` | `{}` or empty — never read | Host only; see the start rules below (repo-verified) |
 
 `canStart` must be evaluated against injected `GameRoomProperties`, **not** a hardcoded 4–8 range:
 `min-players` is overridden to **2** in dev/test, and premium rooms raise `max-players` to **10**.
+It lives in `RoomService#canStartGame` and shares its predicates with `RoomService#startGame`, so the
+button state and the server check cannot disagree (repo-verified).
 
 **Server → Client**
 
@@ -289,7 +291,7 @@ logs and swallows the exception, and the client just hangs.
 | `/topic/lobby/{roomCode}` | `LOBBY_STATE` | event, roomCode, status, hostId, totalPlayers, maxPlayers, canStartGame, players[] (id, displayName, isHost, isReady, isAfk, color), settings (king, loyalist, rebel, spy) — repo-verified |
 | `/topic/lobby/{roomCode}` | `PLAYER_READY_CHANGED` | event, playerId, isReady, canStartGame (repo-verified: `room/controller/LobbyWsController.java`) |
 | `/topic/lobby/{roomCode}` | `CHAT_MESSAGE` | senderId, senderName, senderColor, message, ISO timestamp |
-| `/topic/lobby/{roomCode}` | `GAME_STARTED` | roomCode, turnPlayerId |
+| `/topic/lobby/{roomCode}` | `GAME_STARTED` | event, roomCode, status, playerCount, startedAt (ISO-8601) — repo-verified |
 | `/topic/lobby/{roomCode}` | `GAME_LOG_ENTRY` | id, timestamp, actorName, actionType, cardName, targetName, description |
 | `/user/queue/alerts` | `ACTION_ALERT` | prompt, timeLimitSeconds, allowedResponses — delivered only to the target player |
 | `/user/queue/errors` | — | `{ code, message }` — delivered only to the session whose message failed (repo-verified) |
@@ -311,12 +313,29 @@ CONNECT, and before sending the join — a join broadcast only reaches existing 
 - The write is a version-checked compare-and-set (`RoomRepository#saveIfVersion`); a lost race is
   retried on a fresh read, re-running every check, up to 3 times.
 
+**Lobby start rules** (repo-verified: `room/service/RoomService.java#startGame`)
+
+- Same code canonicalisation as join. Checks, in order: room exists → status is `LOBBY` → sender is
+  `hostId` → roster size ≥ `game.room.min-players` → every non-host ready. AFK slots count toward the
+  minimum and must be ready; role totals are not checked (role assignment is Epic 2).
+- One compare-and-set writes `status=GAME_ACTIVE`, `startedAt` and `lastActiveAt`, retried up to 3
+  times on a fresh read that re-runs every check — a guest who un-readies mid-race fails the start.
+- `GAME_STARTED` is broadcast only after the write lands. A repeat start (double-click) gets
+  `ROOM_IN_GAME` and no second broadcast.
+- **Known gap:** broadcasts from different sessions are not ordered against each other, so a
+  `PLAYER_READY_CHANGED` written just before the start can arrive after `GAME_STARTED`. Clients must
+  ignore lobby events once `GAME_STARTED` arrives.
+- **Known gap:** a `GAME_ACTIVE` room still expires after the idle `game.room.ttl-seconds`.
+
 | `code` | `message` |
 | --- | --- |
 | `ROOM_NOT_FOUND` | This lobby does not exist or has expired. |
 | `ROOM_IN_GAME` | Game is already in progress. (any status other than `LOBBY`) |
 | `ROOM_FULL` | This lobby is full (maximum {maxPlayers} players). |
 | `PLAYER_BANNED` | You have been temporarily removed from this lobby. Please try again later. |
+| `NOT_HOST` | Only the lobby host can start the game. |
+| `MIN_PLAYERS_NOT_MET` | At least {minPlayers} players required to start. |
+| `PLAYERS_NOT_READY` | All players must be ready before starting. |
 | `INVALID_COLOR` | Color must be a hex value like #3182CE. |
 | `INVALID_PAYLOAD` | Message payload is malformed. (unreadable JSON; a failed constraint on any field other than `color` sends that constraint's message instead) |
 | `INTERNAL_ERROR` | Something went wrong. Please try again. (unexpected failures, exhausted retries) |
@@ -324,7 +343,8 @@ CONNECT, and before sending the join — a join broadcast only reaches existing 
 Any other domain exception reaches the client with its own `errorCode` and message.
 
 **Payload bodies are unchanged** from the Sprint 1 contract — only routing and auth move — except
-the lobby snapshot, which LT-28 replaced: `ROOM_STATE_UPDATED` became `LOBBY_STATE`. The `event`
+the lobby snapshot, which LT-28 replaced (`ROOM_STATE_UPDATED` became `LOBBY_STATE`), and
+`GAME_STARTED`, which LT-30 replaced (`turnPlayerId` dropped — turn order belongs to Epic 2). The `event`
 discriminator is redundant under STOMP (the destination already routes) but is retained in broadcast
 bodies so existing frontend switch logic keeps working.
 

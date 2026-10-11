@@ -1,9 +1,12 @@
 package com.seproduction.legendsandtraitors.room.service;
 
 import com.seproduction.legendsandtraitors.common.exception.GameAlreadyStartedException;
+import com.seproduction.legendsandtraitors.common.exception.InsufficientPlayersException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidLobbyActionException;
 import com.seproduction.legendsandtraitors.common.exception.InvalidRequestException;
+import com.seproduction.legendsandtraitors.common.exception.NotHostException;
 import com.seproduction.legendsandtraitors.common.exception.PlayerBannedException;
+import com.seproduction.legendsandtraitors.common.exception.PlayersNotReadyException;
 import com.seproduction.legendsandtraitors.common.exception.RoomFullException;
 import com.seproduction.legendsandtraitors.common.exception.RoomNotFoundException;
 import com.seproduction.legendsandtraitors.config.GameRoomProperties;
@@ -33,6 +36,7 @@ public class RoomService {
 
     private static final int MAX_CLAIM_ATTEMPTS = 3;
     private static final int MAX_JOIN_ATTEMPTS = 3;
+    private static final int MAX_START_ATTEMPTS = 3;
 
     private final RoomCodeGenerator roomCodeGenerator;
     private final RoomRepository roomRepository;
@@ -147,16 +151,62 @@ public class RoomService {
     }
 
     /**
-     * Evaluates whether the room satisfies game start conditions:
-     * - Status is LOBBY
-     * - Minimum player count threshold is met (configured via game.room.min-players)
-     * - All non-host players are marked ready (hosts are inherently ready)
+     * Moves the host's {@code LOBBY} room to {@code GAME_ACTIVE}. Status, host, minimum players and
+     * readiness are checked in that order, and re-checked on a fresh read after every lost write.
      */
-    public boolean canStartGame(RoomState room) {
-        if (room == null || room.getStatus() != RoomStatus.LOBBY
-                || room.getPlayers().size() < gameRoomProperties.getMinPlayers()) {
-            return false;
+    public RoomState startGame(String roomCode, String playerId) {
+        Assert.hasText(roomCode, "roomCode must not be blank");
+        Assert.hasText(playerId, "playerId must not be blank");
+
+        String code = roomCode.toUpperCase(Locale.ROOT);
+        for (int attempt = 0; attempt < MAX_START_ATTEMPTS; attempt++) {
+            RoomState room = roomRepository.findByCode(code)
+                    .orElseThrow(() -> RoomNotFoundException.forRoomCode(code));
+            validateStart(code, room, playerId);
+
+            Instant now = clock.instant().truncatedTo(ChronoUnit.MILLIS);
+            room.setStatus(RoomStatus.GAME_ACTIVE);
+            room.setStartedAt(now);
+            room.setLastActiveAt(now);
+
+            long readVersion = room.getVersion();
+            room.setVersion(readVersion + 1);
+            if (roomRepository.saveIfVersion(room, readVersion)) {
+                return room;
+            }
         }
+        throw new IllegalStateException(
+                "Unable to start game in room " + code + " after " + MAX_START_ATTEMPTS + " conflicting writes");
+    }
+
+    /** Same predicates as {@link #startGame}, so the start button never disagrees with the server. */
+    public boolean canStartGame(RoomState room) {
+        return room != null
+                && room.getStatus() == RoomStatus.LOBBY
+                && hasMinPlayers(room)
+                && allNonHostsReady(room);
+    }
+
+    private void validateStart(String code, RoomState room, String playerId) {
+        if (room.getStatus() != RoomStatus.LOBBY) {
+            throw GameAlreadyStartedException.forRoom(code);
+        }
+        if (!playerId.equals(room.getHostId())) {
+            throw NotHostException.forAction("start the game");
+        }
+        if (!hasMinPlayers(room)) {
+            throw InsufficientPlayersException.forRoom(code, gameRoomProperties.getMinPlayers());
+        }
+        if (!allNonHostsReady(room)) {
+            throw PlayersNotReadyException.forRoom(code);
+        }
+    }
+
+    private boolean hasMinPlayers(RoomState room) {
+        return room.getPlayers().size() >= gameRoomProperties.getMinPlayers();
+    }
+
+    private static boolean allNonHostsReady(RoomState room) {
         return room.getPlayers().stream()
                 .filter(slot -> !slot.isHost())
                 .allMatch(PlayerSlot::isReady);

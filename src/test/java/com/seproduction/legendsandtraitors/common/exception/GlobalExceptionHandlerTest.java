@@ -107,7 +107,7 @@ class GlobalExceptionHandlerTest {
                     .andExpect(jsonPath("$.status").value(403))
                     .andExpect(jsonPath("$.title").value("Forbidden - Not Host"))
                     .andExpect(jsonPath("$.code").value("NOT_HOST"))
-                    .andExpect(jsonPath("$.detail").value("Only the room host is permitted to start the game."))
+                    .andExpect(jsonPath("$.detail").value("Only the lobby host can start the game."))
                     .andExpect(jsonPath("$.instance").value("/test/not-host"))
                     .andExpect(jsonPath("$.timestamp").exists());
         }

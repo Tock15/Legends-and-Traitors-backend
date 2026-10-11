@@ -155,6 +155,32 @@ class RoomRedisRepositoryTest {
     }
 
     @Test
+    @DisplayName("Should keep startedAt null for a lobby room and store it as epoch milliseconds once set")
+    void shouldRoundTripStartedAt() {
+        roomRepository.save(sampleRoom());
+        assertThat(roomRepository.findByCode(ROOM_CODE)).get().extracting(RoomState::getStartedAt).isNull();
+
+        RoomState started = sampleRoom();
+        started.setStatus(RoomStatus.GAME_ACTIVE);
+        started.setStartedAt(CREATED_AT.plusSeconds(300));
+        roomRepository.save(started);
+
+        assertThat(storedJson()).contains("\"startedAt\":" + (CREATED_AT_MILLIS + 300_000));
+        assertThat(roomRepository.findByCode(ROOM_CODE)).hasValue(started);
+    }
+
+    @Test
+    @DisplayName("Should read a room stored before startedAt existed with a null startedAt")
+    void shouldReadRoomStoredWithoutStartedAt() {
+        roomRepository.save(sampleRoom());
+        String legacyJson = storedJson().replace("\"startedAt\":null,", "");
+        assertThat(legacyJson).doesNotContain("startedAt");
+        stringRedisTemplate.opsForValue().set(KEY, legacyJson);
+
+        assertThat(roomRepository.findByCode(ROOM_CODE)).hasValue(sampleRoom());
+    }
+
+    @Test
     @DisplayName("Should apply the configured TTL on save")
     void shouldApplyConfiguredTtlOnSave() {
         roomRepository.save(sampleRoom());
